@@ -12,8 +12,12 @@ concurrency:
 
 jobs:
   test:
-    # The app targets macOS 14; the runner needs to be at least that.
-    runs-on: macos-15
+    # The app targets macOS 14, so any current macOS runner will do. Pinning to
+    # a specific one (macos-15) sat unassigned for 11 minutes and then failed
+    # without ever starting a step; `macos-latest` is the label that actually
+    # gets scheduled.
+    runs-on: macos-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
