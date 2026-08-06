@@ -1,0 +1,17 @@
+# SwiftPM build products
+.build/
+.swiftpm/
+Package.resolved
+
+# Assembled app bundle — produced by tools/bundle.sh, never committed.
+# A login item registered against a bundle here breaks on the next build;
+# install to /Applications with tools/install.sh instead.
+build/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+.DS_Store

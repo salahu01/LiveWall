@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # The app targets macOS 14; the runner needs to be at least that.
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build -c release
+
+      # The suite is pure logic — coverage geometry, frame pacing, output
+      # sizing, index decoding — so it needs no display, no GPU and no
+      # media files, and runs on a headless runner.
+      - name: Test
+        run: swift test
+
+      # Catches an unbuildable bundle, a missing icon or a broken plist, none
+      # of which `swift build` would notice.
+      - name: Assemble the app bundle
+        run: ./tools/bundle.sh release
+
+      - name: Check the bundle is well formed
+        run: |
+          APP=build/LiveWall.app
+          test -x "$APP/Contents/MacOS/LiveWall"
+          test -f "$APP/Contents/Resources/AppIcon.icns"
+          plutil -lint "$APP/Contents/Info.plist"
+          codesign --verify --strict --verbose=2 "$APP"
