@@ -1,3 +1,5 @@
+<img src="docs/icon.png" width="128" align="right" alt="LiveWall icon">
+
 # LiveWall
 
 A live wallpaper app for macOS built around one constraint: **it should cost
@@ -8,7 +10,23 @@ drop in and leave it decoding whether or not the desktop is visible. That is why
 they show up in Activity Monitor and why laptop fans spin. LiveWall takes the
 opposite approach — every design decision below trades features for resources.
 
-Status bar only. No dock icon, no window, no dependencies.
+Status bar only. No dock icon, no window, no dependencies — the menu bar item is
+the entire interface:
+
+<img src="docs/menubar-icon.png" width="44" alt="menu bar icon in light and dark">
+
+## Samples
+
+Two loops to try it with, in [`Samples/`](Samples/). Generated from the app's own
+procedural field rather than sourced, so they are original work under this
+repository's licence — and they loop seamlessly, measured at **0.991** SSIM
+across the seam.
+
+| ![aurora](docs/sample-aurora.jpg) | ![ember](docs/sample-ember.jpg) |
+|---|---|
+| `Samples/aurora.mp4` | `Samples/ember.mp4` |
+
+Regenerate or retune with [`tools/make-samples.sh`](tools/make-samples.sh).
 
 ## Measured
 
@@ -175,6 +193,7 @@ open build/LiveWall.app
 swift test                      # 31 tests, no device or display needed
 ./tools/measure.sh 20           # sample memory and CPU of the running app
 swift tools/make-icon.swift     # regenerate Resources/AppIcon.icns
+./tools/make-samples.sh         # regenerate Samples/ and their poster frames
 
 # verbose logging to stderr — logs every gate transition
 LIVEWALL_VERBOSE=1 build/LiveWall.app/Contents/MacOS/LiveWall
