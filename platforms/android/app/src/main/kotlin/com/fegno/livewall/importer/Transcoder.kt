@@ -84,6 +84,7 @@ object Transcoder {
         destination: File,
         preset: Preset,
         display: DisplayTarget,
+        options: ImportOptions = ImportOptions.DEFAULT,
         cancelled: () -> Boolean = { false },
         progress: (Double) -> Unit = {}
     ): Result {
@@ -131,23 +132,40 @@ object Transcoder {
 
             val storedWidth = inputFormat.getInteger(MediaFormat.KEY_WIDTH)
             val storedHeight = inputFormat.getInteger(MediaFormat.KEY_HEIGHT)
-            val rotation = ((inputFormat.getIntegerOrNull(MediaFormat.KEY_ROTATION) ?: 0) % 360 + 360) % 360
+            val sourceRotation = ImportOptions.normalised(
+                inputFormat.getIntegerOrNull(MediaFormat.KEY_ROTATION) ?: 0
+            )
             val durationUs = inputFormat.getLongOrNull(MediaFormat.KEY_DURATION) ?: 0L
             val sourceFps = inputFormat.frameRateOrNull()?.takeIf { it > 0 }
 
-            // Orientation-corrected source dimensions. A portrait clip stored
-            // landscape with a 90° flag is a portrait clip, and sizing it as
-            // landscape would fit it to the wrong edge.
-            val oriented = if (rotation % 180 == 0)
-                Dimensions(storedWidth, storedHeight)
-            else
-                Dimensions(storedHeight, storedWidth)
+            // The source's own orientation flag plus whatever quarter turn the
+            // user asked for. Everything downstream works in this angle: the
+            // rotation is baked into the output rather than recorded as a flag,
+            // so the playback path never has to know a video was turned.
+            val rotation = options.effectiveRotation(sourceRotation)
+
+            val stored = Dimensions(storedWidth, storedHeight)
+
+            // What the decoder hands the texture — the source flag only, since
+            // the user's turn happens later in the sampler.
+            val decoded = Sizing.orient(stored, sourceRotation)
+
+            // What the file should end up as. A portrait clip stored landscape
+            // with a 90° flag is a portrait clip, and sizing it as landscape
+            // would fit it to the wrong edge; a user quarter turn moves that
+            // same boundary again.
+            val oriented = Sizing.orient(stored, rotation)
 
             // MARK: Output shape
 
             // Never upsample the frame rate past the source, and land on a rate
-            // the panel can present evenly.
-            val capped = sourceFps?.let { min(preset.fps, it.roundToInt()) } ?: preset.fps
+            // the panel can present evenly. The user's choice is the input to
+            // both rules rather than an exemption from either.
+            val preferred = options.preferredFps(preset)
+            val capped = sourceFps?.let { min(preferred, it.roundToInt()) } ?: preferred
+            if (capped != preferred) {
+                Log.info("capped $preferred fps to the source's $capped")
+            }
             val fps = max(1, Sizing.pacedFps(capped, display.maximumFramesPerSecond))
             if (fps != capped) {
                 Log.info(
@@ -231,7 +249,10 @@ object Transcoder {
 
             textureId = OesQuadProgram.createExternalTexture()
             val texture = SurfaceTexture(textureId)
-            texture.setDefaultBufferSize(oriented.width, oriented.height)
+            // The decoder's own size, not the rotated one: this buffer holds the
+            // frame as decoded, and the turn is applied by the sampler reading
+            // out of it.
+            texture.setDefaultBufferSize(decoded.width, decoded.height)
             texture.setOnFrameAvailableListener({
                 synchronized(frameLock) {
                     frameAvailable = true
@@ -364,13 +385,12 @@ object Transcoder {
                             val width = changed.getIntegerOrNull(MediaFormat.KEY_WIDTH)
                             val height = changed.getIntegerOrNull(MediaFormat.KEY_HEIGHT)
                             if (width != null && height != null && width > 0 && height > 0) {
-                                if (rotation % 180 == 0) {
-                                    contentWidth = width
-                                    contentHeight = height
-                                } else {
-                                    contentWidth = height
-                                    contentHeight = width
-                                }
+                                // The drawn content is the decoder's frame after
+                                // the full turn, so it follows `rotation` rather
+                                // than the source flag alone.
+                                val turned = Sizing.orient(Dimensions(width, height), rotation)
+                                contentWidth = turned.width
+                                contentHeight = turned.height
                             }
                         }
 
@@ -443,7 +463,9 @@ object Transcoder {
             val byteCount = destination.length()
             Log.info(
                 "converted to ${output.width}×${output.height} @ ${fps}fps " +
-                    "${if (tenBit) 10 else 8}-bit, kept ${pacer.kept} dropped ${pacer.dropped}, " +
+                    "${if (tenBit) 10 else 8}-bit" +
+                    (if (rotation != 0) " rotated $rotation°" else "") +
+                    ", kept ${pacer.kept} dropped ${pacer.dropped}, " +
                     "${byteCount / 1024} KB"
             )
 

@@ -55,6 +55,18 @@ object Sizing {
     }
 
     /**
+     * [stored] as it looks after [degrees] of rotation.
+     *
+     * A quarter turn swaps the edges; a half turn leaves them alone. Sizing has
+     * to happen in these terms rather than the stored ones — a 1080×1920 clip
+     * held sideways is a landscape clip, and fitting it to the portrait edge
+     * would letterbox it against the wrong axis.
+     */
+    fun orient(stored: Dimensions, degrees: Int): Dimensions =
+        if (ImportOptions.normalised(degrees) % 180 == 0) stored
+        else Dimensions(stored.height, stored.width)
+
+    /**
      * Output dimensions for a preset.
      *
      * A fixed `maxEdge` fits the source inside that edge. `null` sizes to the

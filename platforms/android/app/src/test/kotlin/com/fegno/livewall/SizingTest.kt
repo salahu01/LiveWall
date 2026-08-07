@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
+import kotlin.math.max
 
 class SizingTest {
 
@@ -143,5 +144,35 @@ class SizingTest {
         assertTrue(output.width >= 2 && output.height >= 2)
         assertEquals(0, output.width % 2)
         assertEquals(0, output.height % 2)
+    }
+
+    // MARK: - orient
+
+    @Test
+    fun `a quarter turn swaps the edges and a half turn does not`() {
+        val landscape = Dimensions(1920, 1080)
+        assertEquals(Dimensions(1920, 1080), Sizing.orient(landscape, 0))
+        assertEquals(Dimensions(1080, 1920), Sizing.orient(landscape, 90))
+        assertEquals(Dimensions(1920, 1080), Sizing.orient(landscape, 180))
+        assertEquals(Dimensions(1080, 1920), Sizing.orient(landscape, 270))
+    }
+
+    @Test
+    fun `orienting past a full revolution wraps`() {
+        val landscape = Dimensions(1920, 1080)
+        assertEquals(Sizing.orient(landscape, 90), Sizing.orient(landscape, 450))
+        assertEquals(Sizing.orient(landscape, 90), Sizing.orient(landscape, -270))
+        assertEquals(Sizing.orient(landscape, 0), Sizing.orient(landscape, 360))
+    }
+
+    @Test
+    fun `a turned clip is sized against the edge it actually has`() {
+        // The bug this guards: a 1920×1080 source turned 90° is a portrait clip.
+        // Sizing it as landscape fits 1920 to the maxEdge and leaves the real
+        // long edge — the 1080 that became the height — fitted to nothing.
+        val turned = Sizing.orient(Dimensions(1920, 1080), 90)
+        val output = Sizing.outputSize(turned, Preset.ULTRA_LIGHT, phone)
+        assertEquals("the long edge should be the one capped", 960, max(output.width, output.height))
+        assertTrue("the output should be portrait", output.height > output.width)
     }
 }

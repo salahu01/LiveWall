@@ -13,12 +13,14 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -26,6 +28,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import com.fegno.livewall.app.LiveWallService
+import com.fegno.livewall.importer.ImportOptions
 import com.fegno.livewall.importer.Library
 import com.fegno.livewall.importer.Preset
 import com.fegno.livewall.importer.Transcoder
@@ -130,7 +133,9 @@ class SettingsActivity : Activity() {
         column.addView(
             caption(
                 "Videos are converted on import and only the converted file is " +
-                    "ever played. Your original is never copied or modified."
+                    "ever played. Your original is never copied or modified. " +
+                    "Frame rate and rotation are asked per video, since both " +
+                    "belong to the clip rather than to the library."
             )
         )
 
@@ -294,12 +299,83 @@ class SettingsActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_VIDEO || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
-        beginImport(uri)
+        askImportOptions(uri)
     }
 
     // MARK: - Import
 
-    private fun beginImport(uri: Uri) {
+    /**
+     * The one dialog between picking a video and converting it.
+     *
+     * Frame rate and rotation are asked here rather than on the settings screen
+     * because both are properties of the clip, not of the library: a video shot
+     * sideways needs a turn that the next one will not, and the rate that suits
+     * a slow drift starves a fast pan. Everything else about the import is a
+     * preference, and preferences live in Settings.
+     */
+    private fun askImportOptions(uri: Uri) {
+        val preset = settings.preset
+        var rotation = 0
+
+        val rate = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(preset.fps.toString())
+            hint = "${ImportOptions.MIN_FPS}–${ImportOptions.MAX_FPS}"
+            setSingleLine()
+        }
+
+        val rotationButton = Button(this).apply {
+            text = "Rotate: none"
+            setOnClickListener {
+                // A rotate button walks the quarter turns rather than opening
+                // another list — four states is fewer taps than a picker.
+                rotation = ImportOptions.ROTATIONS[
+                    (ImportOptions.ROTATIONS.indexOf(rotation) + 1) % ImportOptions.ROTATIONS.size
+                ]
+                text = if (rotation == 0) "Rotate: none" else "Rotate: $rotation°"
+            }
+        }
+
+        val fields = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(8), dp(24), 0)
+            addView(TextView(context).apply {
+                text = "Frames per second"
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            })
+            addView(rate)
+            addView(TextView(context).apply {
+                text = "The source's own rate is the ceiling, and the rate is " +
+                    "snapped down to divide this screen's refresh evenly. " +
+                    "Lower costs less battery — it is the only import setting " +
+                    "that does."
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                alpha = 0.6f
+                setPadding(0, dp(8), 0, dp(16))
+            })
+            addView(rotationButton)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Import options")
+            .setView(fields)
+            .setPositiveButton("Convert") { _, _ ->
+                // An empty or unparseable box means "no opinion", which is what
+                // `fps = null` says — the preset's rate then applies.
+                val typed = rate.text.toString().trim().toIntOrNull()
+                beginImport(
+                    uri,
+                    ImportOptions(
+                        fps = typed?.let { ImportOptions.sanitisedFps(it) },
+                        rotationDegrees = rotation
+                    )
+                )
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun beginImport(uri: Uri, options: ImportOptions) {
         val preset = settings.preset
         val display = currentDisplayTarget(this)
         val title = displayName(uri) ?: "Video"
@@ -335,6 +411,7 @@ class SettingsActivity : Activity() {
                     destination = destination,
                     preset = preset,
                     display = display,
+                    options = options,
                     cancelled = { cancelled.get() },
                     progress = { fraction ->
                         main.post { progressBar.progress = (fraction * 100).toInt() }
