@@ -5,9 +5,11 @@
 A live wallpaper app for macOS built around one constraint: **it should cost
 almost nothing when you aren't looking at it.**
 
-The Windows port of the same design lives in
-[`platforms/windows/`](../windows/README.md); the [top-level
-README](../../README.md) covers what the two share.
+The same design is ported to
+[`platforms/windows/`](../windows/README.md),
+[`platforms/linux/`](../linux/README.md) and
+[`platforms/android/`](../android/README.md); the [top-level
+README](../../README.md) covers what they share.
 
 Existing video wallpaper apps mostly wrap `AVPlayer` around whatever file you
 drop in and leave it decoding whether or not the desktop is visible. That is why

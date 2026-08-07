@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The two drifting bands from the macOS icon. They run edge to edge on
+     purpose: an adaptive icon's mask crops the corners, and horizontal bands are
+     the one shape that survives every mask shape a launcher might apply. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#2EFFFFFF"
+        android:pathData="M0,44 C18,32 36,52 54,46 C72,40 90,30 108,38 L108,108 L0,108 Z" />
+    <path
+        android:fillColor="#3DFFFFFF"
+        android:pathData="M0,66 C20,54 34,74 56,68 C78,62 92,58 108,64 L108,108 L0,108 Z" />
+</vector>

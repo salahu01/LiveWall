@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=LiveWall
+Comment=Low-power live wallpaper
+Exec=livewall
+Icon=livewall
+Terminal=false
+Categories=Utility;
+# This is a daemon with a tray icon and a CLI, not something to launch from an
+# application menu. Installed so that the icon has a .desktop to be looked up
+# against — StatusNotifierItem hosts resolve an item's IconName through the
+# icon theme, and a desktop entry is what associates the two.
+NoDisplay=true

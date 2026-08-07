@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- DeviceDefault.DayNight is the platform's own theme: it follows the
+         system light/dark setting and pulls in the OEM's styling without an
+         AppCompat or Material dependency. -->
+    <style name="Theme.LiveWall" parent="@android:style/Theme.DeviceDefault.DayNight" />
+</resources>

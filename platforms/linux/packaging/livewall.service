@@ -1,0 +1,45 @@
+# A systemd user unit, for anyone who prefers one to the autostart entry.
+#
+# `livewall autostart on` writes ~/.config/autostart/livewall.desktop instead,
+# and that is the default because every desktop environment reads it and it
+# needs no service manager. This unit is here for the case the autostart entry
+# handles badly: a session where you want the wallpaper restarted if it dies,
+# or where you are already managing everything else this way.
+#
+# Install with:
+#   install -Dm644 packaging/livewall.service ~/.config/systemd/user/livewall.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now livewall
+#
+# Use one or the other, not both. Two copies cannot run — the second sees the
+# control socket and exits — but you would get a failed unit or a confusing log
+# line every login.
+
+[Unit]
+Description=LiveWall live wallpaper
+Documentation=https://github.com/salahu01/LiveWall
+# graphical-session.target is what tells systemd the compositor is up and
+# DISPLAY/WAYLAND_DISPLAY are in the user environment. Without it the daemon
+# starts before there is a display server to connect to.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/livewall
+# Restart on a crash but not on a clean `livewall quit`, which is a user asking
+# it to stop.
+Restart=on-failure
+RestartSec=5
+
+# The daemon needs a GPU, a display socket and the user's own files, and
+# nothing else. These are the confinement options that cost nothing here.
+PrivateTmp=false
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+MemoryDenyWriteExecute=false
+
+[Install]
+WantedBy=graphical-session.target
