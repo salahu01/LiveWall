@@ -257,15 +257,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.message = "Pick a video. It will be converted to a low-power loop; the original is left untouched."
         panel.prompt = "Convert"
 
+        // Frame rate and rotation belong to the clip rather than to the library —
+        // a video shot sideways needs a turn the next one will not — so they are
+        // asked per import. The panel's accessory view is where that costs the
+        // user no extra dialog.
+        let accessory = importAccessoryView()
+        panel.accessoryView = accessory.view
+        panel.isAccessoryViewDisclosed = true
+
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let source = panel.url else { return }
 
-        startImport(of: source)
+        // An empty or unparseable field means "no opinion", which is what
+        // `fps == nil` says — the preset's rate then applies.
+        let typed = Int(accessory.fpsField.stringValue.trimmingCharacters(in: .whitespaces))
+        let options = ImportOptions(
+            fps: typed.map(ImportOptions.sanitisedFPS),
+            rotationDegrees: ImportOptions.rotations[
+                min(max(accessory.rotationPopUp.indexOfSelectedItem, 0),
+                    ImportOptions.rotations.count - 1)])
+
+        startImport(of: source, options: options)
+    }
+
+    /// The frame-rate field and rotation menu shown inside the open panel.
+    ///
+    /// Returned as a tuple rather than stored on the delegate because the panel
+    /// is modal: the controls live exactly as long as `runModal()` does, and
+    /// reading them after it returns is the whole interaction.
+    private func importAccessoryView()
+        -> (view: NSView, fpsField: NSTextField, rotationPopUp: NSPopUpButton) {
+
+        let preset = engine.library.preset
+
+        let fpsLabel = NSTextField(labelWithString: "Frames per second:")
+        let fpsField = NSTextField(string: String(preset.fps))
+        fpsField.placeholderString = "\(ImportOptions.minimumFPS)–\(ImportOptions.maximumFPS)"
+        fpsField.alignment = .right
+        fpsField.widthAnchor.constraint(equalToConstant: 56).isActive = true
+
+        let rotationLabel = NSTextField(labelWithString: "Rotate:")
+        let rotationPopUp = NSPopUpButton()
+        rotationPopUp.addItems(withTitles: ImportOptions.rotations.map {
+            ImportOptions(rotationDegrees: $0).rotationLabel
+        })
+
+        let note = NSTextField(wrappingLabelWithString:
+            "The source's own rate is the ceiling, and the rate is snapped down "
+            + "to divide this display's refresh evenly. Frame rate is the only "
+            + "import setting that costs CPU at playback.")
+        note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        note.textColor = .secondaryLabelColor
+
+        let controls = NSStackView(views: [fpsLabel, fpsField, rotationLabel, rotationPopUp])
+        controls.orientation = .horizontal
+        controls.spacing = 8
+
+        let column = NSStackView(views: [controls, note])
+        column.orientation = .vertical
+        column.alignment = .leading
+        column.spacing = 6
+        column.edgeInsets = NSEdgeInsets(top: 10, left: 20, bottom: 10, right: 20)
+        note.widthAnchor.constraint(equalToConstant: 380).isActive = true
+
+        return (column, fpsField, rotationPopUp)
     }
 
     // MARK: - Import
 
-    private func startImport(of source: URL) {
+    private func startImport(of source: URL, options: ImportOptions) {
         importing = true
         let id = UUID()
         let destination = engine.library.destinationURL(id: id)
@@ -281,6 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     destination: destination,
                     preset: preset,
                     display: Transcoder.DisplayTarget.main(),
+                    options: options,
                     progress: { [weak self] fraction in
                         self?.statusItem.button?.title = String(format: " %d%%", Int(fraction * 100))
                     })

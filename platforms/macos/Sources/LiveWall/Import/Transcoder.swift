@@ -155,6 +155,7 @@ enum Transcoder {
                         destination: URL,
                         preset: Preset,
                         display: DisplayTarget = .fallback,
+                        options: ImportOptions = .default,
                         progress: @escaping (Double) -> Void) async throws -> Result {
 
         let asset = AVURLAsset(url: source, options: [
@@ -183,10 +184,17 @@ enum Transcoder {
             throw TranscodeError.unreadable(source.lastPathComponent)
         }
 
+        // The track's own orientation plus whatever quarter turn the user asked
+        // for. Everything downstream works in this one transform: the rotation
+        // is baked into the output rather than recorded as a flag, so the
+        // playback path never has to know a video was turned.
+        let oriented = transform.concatenating(options.rotationTransform)
+
         // Orientation-corrected source dimensions. Transforming the *rect*
         // rather than the size keeps the origin a rotation moves off-screen,
-        // which the fit transform below has to cancel out.
-        let orientedRect = CGRect(origin: .zero, size: naturalSize).applying(transform)
+        // which the fit transform below has to cancel out — and that already
+        // holds for the user's turn, since it is folded into the same transform.
+        let orientedRect = CGRect(origin: .zero, size: naturalSize).applying(oriented)
         let sourceSize = CGSize(width: abs(orientedRect.width), height: abs(orientedRect.height))
         let outputSize = outputSize(for: sourceSize, preset: preset, display: display)
 
@@ -195,7 +203,14 @@ enum Transcoder {
         // refreshes is decoded and then dropped by the compositor, which is the
         // most wasteful thing this pipeline can do. 24 divides 120 exactly; on a
         // 60 Hz panel it does not, and 20 is both smoother and cheaper.
-        let capped = sourceFPS > 0 ? min(preset.fps, Int(sourceFPS.rounded())) : preset.fps
+        //
+        // The user's chosen rate is the input to both rules rather than an
+        // exemption from either.
+        let preferred = options.preferredFPS(for: preset)
+        let capped = sourceFPS > 0 ? min(preferred, Int(sourceFPS.rounded())) : preferred
+        if capped != preferred {
+            Log.info("capped \(preferred) fps to the source's \(capped)")
+        }
         let fps = max(1, pacedFPS(preferred: capped, refresh: display.maximumFramesPerSecond))
         if fps != capped {
             Log.info("paced \(capped) fps down to \(fps) to divide a "
@@ -217,7 +232,7 @@ enum Transcoder {
         // instruction, which means replacing the generated instructions.
         composition.instructions = [fitInstruction(for: track,
                                                    duration: duration,
-                                                   transform: transform,
+                                                   transform: oriented,
                                                    orientedRect: orientedRect,
                                                    outputSize: outputSize)]
 
@@ -366,6 +381,12 @@ enum Transcoder {
         let attributes = try? FileManager.default.attributesOfItem(atPath: destination.path)
         let bytes = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
         DispatchQueue.main.async { progress(1) }
+
+        let turn = ImportOptions.normalised(options.rotationDegrees)
+        Log.info("converted to \(Int(outputSize.width))x\(Int(outputSize.height)) @ \(fps)fps "
+                 + "\(preset.bitDepth)-bit"
+                 + (turn != 0 ? " rotated \(turn)°" : "")
+                 + ", \(bytes / 1024) KB")
 
         return Result(url: destination, size: outputSize, fps: fps,
                       bitDepth: preset.bitDepth, byteCount: bytes)
