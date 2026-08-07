@@ -4,6 +4,7 @@ add_executable(livewall_tests
     PacerTests.cpp
     OutputSizeTests.cpp
     IndexTests.cpp
+    RotationTests.cpp
 )
 
 target_link_libraries(livewall_tests PRIVATE livewall_core)

@@ -40,6 +40,10 @@ public:
     static constexpr std::string_view kPreset = "importPresetName";
     static constexpr std::string_view kPauseOnBattery = "pauseOnBattery";
     static constexpr std::string_view kFitMode = "fitMode";
+    // Applied to the next import and then left as they are. Zero on both means
+    // "no opinion": the preset's rate applies and the frame is left upright.
+    static constexpr std::string_view kImportFps = "importFps";
+    static constexpr std::string_view kImportRotation = "importRotation";
 
 private:
     void save() const;

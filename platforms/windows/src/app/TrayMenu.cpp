@@ -5,8 +5,10 @@
 #include "app/MonitorController.h"
 #include "app/WallpaperEngine.h"
 #include "import/CodecSupport.h"
+#include "import/ImportOptions.h"
 #include "render/DesktopHost.h"
 #include "support/Footprint.h"
+#include "support/Settings.h"
 #include "support/StartupItem.h"
 #include "support/Strings.h"
 
@@ -107,6 +109,47 @@ HMENU buildQualityMenu(WallpaperEngine& engine) {
     return submenu;
 }
 
+HMENU buildFrameRateMenu(const Settings& settings) {
+    HMENU submenu = CreatePopupMenu();
+
+    const int chosen = static_cast<int>(settings.intValue(Settings::kImportFps, 0));
+
+    // Zero first, and checked when nothing has been chosen: the preset's own
+    // rate is the default and has to be reachable again after a choice.
+    appendText(submenu, IDM_IMPORT_FPS_FIRST, "Use the preset's rate", true, chosen <= 0);
+    appendSeparator(submenu);
+
+    for (int i = 0; i < ImportOptions::kOfferedFpsCount; ++i) {
+        const int rate = ImportOptions::kOfferedFps[i];
+        appendText(submenu, IDM_IMPORT_FPS_FIRST + 1 + static_cast<UINT>(i),
+                   std::to_string(rate) + " fps", true, chosen == rate);
+    }
+
+    appendSeparator(submenu);
+    appendText(submenu, 0,
+               "Capped to the source's rate, then snapped down to divide this "
+               "display evenly. The only import setting that costs CPU at playback.",
+               /*enabled=*/false);
+    return submenu;
+}
+
+HMENU buildRotationMenu(const Settings& settings) {
+    HMENU submenu = CreatePopupMenu();
+
+    const int chosen =
+        ImportOptions::normalised(static_cast<int>(settings.intValue(Settings::kImportRotation, 0)));
+
+    for (int i = 0; i < ImportOptions::kRotationCount; ++i) {
+        const int turn = ImportOptions::kRotations[i];
+        ImportOptions options;
+        options.rotationDegrees = turn;
+        appendText(submenu, IDM_IMPORT_ROT_FIRST + static_cast<UINT>(i),
+                   turn == 0 ? "Upright" : options.rotationLabel() + " clockwise", true,
+                   chosen == turn);
+    }
+    return submenu;
+}
+
 }  // namespace
 
 TrayMenu::Built TrayMenu::build(WallpaperEngine& engine, bool importing, int importPercent) {
@@ -155,6 +198,11 @@ TrayMenu::Built TrayMenu::build(WallpaperEngine& engine, bool importing, int imp
     }
 
     appendSubmenu(menu, buildQualityMenu(engine), "Import Quality");
+    // Both apply to the next video added, not to what is already converted, so
+    // they are read straight from the settings file rather than from the engine.
+    const Settings importSettings;
+    appendSubmenu(menu, buildFrameRateMenu(importSettings), "Import Frame Rate");
+    appendSubmenu(menu, buildRotationMenu(importSettings), "Rotate Next Video");
     appendSubmenu(menu, buildScalingMenu(engine), "Scaling");
 
     appendText(menu, IDM_PAUSE_ON_BATTERY, "Pause on Battery", true,

@@ -34,6 +34,8 @@
 #include <string>
 #include <string_view>
 
+#include "import/ImportOptions.h"
+
 namespace livewall {
 
 class Transcoder {
@@ -106,6 +108,7 @@ public:
     // invalid in the current state", which tell a user nothing actionable.
     static std::string convert(const std::wstring& source, const std::wstring& destination,
                                const Preset& preset, const DisplayTarget& display,
+                               const ImportOptions& options,
                                const std::function<void(double)>& progress,
                                const std::function<bool()>& cancelled, Result* result);
 

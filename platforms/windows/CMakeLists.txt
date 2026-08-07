@@ -52,6 +52,7 @@ add_library(livewall_core STATIC
     src/render/VideoSource.cpp
 
     src/import/FramePacer.cpp
+    src/import/FrameRotate.cpp
     src/import/CodecSupport.cpp
     src/import/Transcoder.cpp
     src/import/Library.cpp

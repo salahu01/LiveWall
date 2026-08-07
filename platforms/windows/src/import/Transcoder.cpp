@@ -13,6 +13,8 @@
 
 #include "import/CodecSupport.h"
 #include "import/FramePacer.h"
+#include "import/FrameRotate.h"
+#include "import/ImportOptions.h"
 #include "support/Log.h"
 #include "support/Paths.h"
 #include "support/Strings.h"
@@ -53,6 +55,80 @@ std::string describe(HRESULT hr, const char* stage) {
         default:
             return std::string("Conversion failed at ") + stage + ": " + Log::hresult(hr);
     }
+}
+
+// Turns one NV12 or P010 sample into a fresh sample of the rotated geometry.
+//
+// Both formats are two-plane 4:2:0: a full-resolution luma plane, then a
+// half-resolution plane holding interleaved U and V. `lumaBytes` is 1 for NV12
+// and 2 for P010, which makes the chroma element twice that in each case — and
+// since a chroma row holds `width / 2` elements of `2 * lumaBytes`, both planes
+// end up on the same stride, `width * lumaBytes`.
+//
+// The sample is flattened with ConvertToContiguousBuffer rather than locked as a
+// 2D buffer: the rotation reads every byte exactly once regardless, so the copy
+// a non-contiguous sample would cost is the copy that would happen anyway.
+bool rotateSample(IMFSample* source, int srcWidth, int srcHeight, int dstWidth, int dstHeight,
+                  int lumaBytes, int degrees, IMFSample** rotated) {
+    ComPtr<IMFMediaBuffer> sourceBuffer;
+    if (FAILED(source->ConvertToContiguousBuffer(&sourceBuffer))) return false;
+
+    const DWORD lumaBytesTotal =
+        static_cast<DWORD>(srcWidth) * static_cast<DWORD>(srcHeight) * lumaBytes;
+    // 4:2:0 chroma is a quarter of the sample positions carrying two components.
+    const DWORD frameBytes = lumaBytesTotal + lumaBytesTotal / 2;
+
+    ComPtr<IMFMediaBuffer> destinationBuffer;
+    if (FAILED(MFCreateMemoryBuffer(frameBytes, &destinationBuffer))) return false;
+
+    BYTE* sourceData = nullptr;
+    DWORD sourceLength = 0;
+    if (FAILED(sourceBuffer->Lock(&sourceData, nullptr, &sourceLength))) return false;
+    if (sourceLength < frameBytes) {
+        sourceBuffer->Unlock();
+        return false;
+    }
+
+    BYTE* destinationData = nullptr;
+    if (FAILED(destinationBuffer->Lock(&destinationData, nullptr, nullptr))) {
+        sourceBuffer->Unlock();
+        return false;
+    }
+
+    const int sourceStride = srcWidth * lumaBytes;
+    const int destinationStride = dstWidth * lumaBytes;
+
+    PlaneGeometry luma;
+    luma.width = srcWidth;
+    luma.height = srcHeight;
+    luma.elementBytes = lumaBytes;
+    rotatePlane(sourceData, sourceStride, luma, destinationData, destinationStride, degrees);
+
+    PlaneGeometry chroma;
+    chroma.width = srcWidth / 2;
+    chroma.height = srcHeight / 2;
+    chroma.elementBytes = lumaBytes * 2;
+    rotatePlane(sourceData + lumaBytesTotal, sourceStride, chroma,
+                destinationData + static_cast<DWORD>(dstWidth) * dstHeight * lumaBytes,
+                destinationStride, degrees);
+
+    destinationBuffer->Unlock();
+    sourceBuffer->Unlock();
+    destinationBuffer->SetCurrentLength(frameBytes);
+
+    ComPtr<IMFSample> output;
+    if (FAILED(MFCreateSample(&output))) return false;
+    if (FAILED(output->AddBuffer(destinationBuffer.Get()))) return false;
+
+    // Timestamps are stamped by the pacer after this returns, but carrying the
+    // source's across keeps a sample that is inspected in between coherent.
+    LONGLONG time = 0;
+    LONGLONG duration = 0;
+    if (SUCCEEDED(source->GetSampleTime(&time))) output->SetSampleTime(time);
+    if (SUCCEEDED(source->GetSampleDuration(&duration))) output->SetSampleDuration(duration);
+
+    *rotated = output.Detach();
+    return true;
 }
 
 // Applies the encoder settings that a media type cannot carry. These live on
@@ -276,6 +352,16 @@ std::string Transcoder::convert(const std::wstring& source, const std::wstring& 
     nativeType->GetUINT32(MF_MT_VIDEO_ROTATION, &rotation);
     if (rotation == 90 || rotation == 270) std::swap(sourceWidth, sourceHeight);
 
+    // The user's quarter turn is applied on top of whatever the processor
+    // already did, so the two compose: a clip that arrives with a 90 degree flag
+    // and is turned another 90 here ends up at 180.
+    const int turn = ImportOptions::normalised(options.rotationDegrees);
+    if (!options.isQuarterTurn()) {
+        return format("%d degrees is not a quarter turn.", options.rotationDegrees);
+    }
+    const bool rotates = turn != 0;
+    if (options.swapsEdges()) std::swap(sourceWidth, sourceHeight);
+
     UINT32 rateNumerator = 0;
     UINT32 rateDenominator = 0;
     MFGetAttributeRatio(nativeType.Get(), MF_MT_FRAME_RATE, &rateNumerator, &rateDenominator);
@@ -289,9 +375,20 @@ std::string Transcoder::convert(const std::wstring& source, const std::wstring& 
     outputSize(static_cast<int>(sourceWidth), static_cast<int>(sourceHeight), preset, display,
                &width, &height);
 
+    // What the video processor is asked to produce, before the user's turn. For
+    // a quarter turn that is the output with its edges swapped back — the
+    // processor scales, and `rotateSample` below transposes.
+    const int scaledWidth = options.swapsEdges() ? height : width;
+    const int scaledHeight = options.swapsEdges() ? width : height;
+
     // Never upsample the frame rate past the source, then land on a rate the
-    // display can present evenly.
-    const int capped = sourceFPS > 0 ? std::min(preset.fps, sourceFPS) : preset.fps;
+    // display can present evenly. The user's chosen rate is the input to both
+    // rules rather than an exemption from either.
+    const int preferred = options.preferredFps(preset.fps);
+    const int capped = sourceFPS > 0 ? std::min(preferred, sourceFPS) : preferred;
+    if (capped != preferred) {
+        Log::info(format("capped %d fps to the source's %d", preferred, capped));
+    }
     const int fps = std::max(1, pacedFPS(capped, display.refreshHz));
     if (fps != capped) {
         Log::info(format("paced %d fps down to %d to divide a %d Hz display evenly", capped, fps,
@@ -308,8 +405,8 @@ std::string Transcoder::convert(const std::wstring& source, const std::wstring& 
     readerOutput->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     readerOutput->SetGUID(MF_MT_SUBTYPE,
                           codec.bitDepth >= 10 ? MFVideoFormat_P010 : MFVideoFormat_NV12);
-    MFSetAttributeSize(readerOutput.Get(), MF_MT_FRAME_SIZE, static_cast<UINT32>(width),
-                       static_cast<UINT32>(height));
+    MFSetAttributeSize(readerOutput.Get(), MF_MT_FRAME_SIZE, static_cast<UINT32>(scaledWidth),
+                       static_cast<UINT32>(scaledHeight));
     MFSetAttributeRatio(readerOutput.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
     readerOutput->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
 
@@ -322,6 +419,13 @@ std::string Transcoder::convert(const std::wstring& source, const std::wstring& 
             static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, readerOutput.Get());
     }
     if (FAILED(hr)) return describe(hr, "setting up the scaler");
+
+    // Which intermediate the processor actually agreed to, since the P010
+    // request above may have fallen back. P010 stores each component in two
+    // bytes; NV12 in one. The rotation needs the real answer, not the request.
+    GUID intermediate = GUID_NULL;
+    readerOutput->GetGUID(MF_MT_SUBTYPE, &intermediate);
+    const int lumaBytes = intermediate == MFVideoFormat_P010 ? 2 : 1;
 
     // Total duration, for progress.
     long long durationHns = 0;
@@ -435,10 +539,23 @@ std::string Transcoder::convert(const std::wstring& source, const std::wstring& 
 
         const FramePacer::Decision decision = pacer.accept(timestamp);
         if (decision.keep) {
-            sample->SetSampleTime(decision.outputTimeHns);
-            sample->SetSampleDuration(decision.durationHns);
+            // Rotate before stamping, so the timestamps the encoder sees belong
+            // to the sample it is actually given.
+            ComPtr<IMFSample> outgoing = sample;
+            if (rotates) {
+                ComPtr<IMFSample> turned;
+                if (!rotateSample(sample.Get(), scaledWidth, scaledHeight, width, height,
+                                  lumaBytes, turn, &turned)) {
+                    failure = "Could not rotate a frame.";
+                    break;
+                }
+                outgoing = turned;
+            }
 
-            hr = writer->WriteSample(streamIndex, sample.Get());
+            outgoing->SetSampleTime(decision.outputTimeHns);
+            outgoing->SetSampleDuration(decision.durationHns);
+
+            hr = writer->WriteSample(streamIndex, outgoing.Get());
             if (FAILED(hr)) {
                 failure = describe(hr, "encoding a frame");
                 break;

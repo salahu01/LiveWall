@@ -26,6 +26,17 @@
 #define IDM_FIT_FIRST           40120   // + FitMode raw value
 #define IDM_FIT_LAST            40129
 
+// Frame rate and rotation apply to the *next* import rather than to the
+// library, so unlike the preset they are not a property of anything already
+// converted. They still live in the menu because a tray application has no
+// other surface: Win32's file dialog takes no accessory view the way
+// NSOpenPanel does, so there is nowhere to ask between picking and converting.
+#define IDM_IMPORT_FPS_FIRST    40130   // + index into the offered rates
+#define IDM_IMPORT_FPS_LAST     40149
+
+#define IDM_IMPORT_ROT_FIRST    40150   // + index into 0/90/180/270
+#define IDM_IMPORT_ROT_LAST     40159
+
 #define IDM_WALLPAPER_FIRST     41000
 #define IDM_WALLPAPER_LAST      45095
 

@@ -8,9 +8,11 @@
 
 #include "resource.h"
 
+#include "import/ImportOptions.h"
 #include "support/Guid.h"
 #include "support/Log.h"
 #include "support/Paths.h"
+#include "support/Settings.h"
 #include "support/StartupItem.h"
 #include "support/Strings.h"
 
@@ -261,6 +263,30 @@ void AppHost::onCommand(UINT command) {
         return;
     }
 
+    // Frame rate and rotation are written straight to settings and read again
+    // when the next import starts, so neither disturbs anything already
+    // converted. Index 0 of the rate menu is "use the preset's rate", which is
+    // stored as zero.
+    if (command >= IDM_IMPORT_FPS_FIRST && command <= IDM_IMPORT_FPS_LAST) {
+        const size_t index = command - IDM_IMPORT_FPS_FIRST;
+        Settings settings;
+        settings.setInt(Settings::kImportFps,
+                        index == 0 || index > static_cast<size_t>(ImportOptions::kOfferedFpsCount)
+                            ? 0
+                            : ImportOptions::kOfferedFps[index - 1]);
+        return;
+    }
+
+    if (command >= IDM_IMPORT_ROT_FIRST && command <= IDM_IMPORT_ROT_LAST) {
+        const size_t index = command - IDM_IMPORT_ROT_FIRST;
+        Settings settings;
+        settings.setInt(Settings::kImportRotation,
+                        index < static_cast<size_t>(ImportOptions::kRotationCount)
+                            ? ImportOptions::kRotations[index]
+                            : 0);
+        return;
+    }
+
     switch (command) {
         case IDM_PROCEDURAL:
             engine_.select({});
@@ -333,6 +359,15 @@ void AppHost::startImport() {
     const Transcoder::DisplayTarget display = Transcoder::DisplayTarget::primary();
     const std::string title = narrow(paths::stem(source));
 
+    // Read now rather than on the worker thread, so the import uses what the
+    // menu said when the user picked the file even if they change it during a
+    // long conversion.
+    const Settings importSettings;
+    ImportOptions options;
+    options.fps = static_cast<int>(importSettings.intValue(Settings::kImportFps, 0));
+    options.rotationDegrees =
+        static_cast<int>(importSettings.intValue(Settings::kImportRotation, 0));
+
     importing_ = true;
     importCancelled_ = false;
     importPercent_ = 0;
@@ -347,10 +382,10 @@ void AppHost::startImport() {
     // message loop that stops pumping for that long makes Windows declare the
     // process not responding — at which point the tray icon stops answering
     // clicks and the wallpaper's own timers stop firing.
-    importThread_ = std::thread([this, source, destination, preset, display, title, id] {
+    importThread_ = std::thread([this, source, destination, preset, display, options, title, id] {
         Transcoder::Result result;
         const std::string error = Transcoder::convert(
-            source, destination, *preset, display,
+            source, destination, *preset, display, options,
             [this](double fraction) {
                 const int percent = static_cast<int>(fraction * 100);
                 if (percent != importPercent_) importPercent_ = percent;

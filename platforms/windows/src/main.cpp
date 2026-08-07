@@ -26,6 +26,7 @@
 
 #include "app/AppHost.h"
 #include "import/CodecSupport.h"
+#include "import/ImportOptions.h"
 #include "import/Transcoder.h"
 #include "support/Log.h"
 #include "support/Paths.h"
@@ -95,7 +96,7 @@ int runHeadlessConversion(const std::vector<std::wstring>& arguments) {
 
     if (flag == 0 || arguments.size() < flag + 3) {
         writeLine("usage: LiveWall.exe --convert <source> <destination.mp4> "
-                  "[ultra|balanced|native]");
+                  "[ultra|balanced|native] [--fps N] [--rotate 0|90|180|270]");
         return 2;
     }
 
@@ -112,6 +113,23 @@ int runHeadlessConversion(const std::vector<std::wstring>& arguments) {
         }
     }
 
+    // Frame rate and rotation belong to one video rather than to the library, so
+    // they are flags here and a per-import menu choice in the tray. A missing or
+    // unparseable value leaves the field at zero, which means "no opinion": the
+    // preset's rate applies and the frame is left upright.
+    ImportOptions options;
+    for (size_t i = flag + 3; i + 1 < arguments.size(); ++i) {
+        if (arguments[i] == L"--fps") {
+            options.fps = _wtoi(arguments[i + 1].c_str());
+        } else if (arguments[i] == L"--rotate") {
+            options.rotationDegrees = _wtoi(arguments[i + 1].c_str());
+        }
+    }
+    if (!options.isQuarterTurn()) {
+        writeLine("error: --rotate takes 0, 90, 180 or 270");
+        return 2;
+    }
+
     // Headless runs still size against the real panel when there is one, so
     // --convert produces the same file the menu would.
     const Transcoder::DisplayTarget display = Transcoder::DisplayTarget::primary();
@@ -119,7 +137,7 @@ int runHeadlessConversion(const std::vector<std::wstring>& arguments) {
     int lastReported = -1;
     Transcoder::Result result;
     const std::string error = Transcoder::convert(
-        source, destination, *preset, display,
+        source, destination, *preset, display, options,
         [&lastReported](double fraction) {
             const int percent = static_cast<int>(fraction * 100);
             if (percent != lastReported && percent % 10 == 0) {
