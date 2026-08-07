@@ -1,6 +1,10 @@
 #include "import/Transcoder.h"
 
+// codecapi.h defines the CODECAPI_* property GUIDs; the ICodecAPI interface
+// they are passed to is declared separately in icodecapi.h. Including only the
+// first compiles the GUID references and then fails on the interface itself.
 #include <codecapi.h>
+#include <icodecapi.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>

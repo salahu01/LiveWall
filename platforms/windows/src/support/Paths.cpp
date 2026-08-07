@@ -1,6 +1,9 @@
 #include "support/Paths.h"
 
 #include <windows.h>
+// ShellExecuteW lives here rather than in shlobj.h, which declares the known
+// folder and item APIs this file also uses. Both are needed.
+#include <shellapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
 
