@@ -19,6 +19,9 @@
 
 #include <windows.h>
 
+// CommandLineToArgvW, which splits the wide command line the three modes above
+// are selected from. It lives in shellapi.h rather than windows.h.
+#include <shellapi.h>
 #include <objbase.h>
 
 #include <string>
