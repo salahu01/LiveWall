@@ -11,13 +11,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  macos:
     # The app targets macOS 14, so any current macOS runner will do. Pinning to
     # a specific one (macos-15) sat unassigned for 11 minutes and then failed
     # without ever starting a step; `macos-latest` is the label that actually
     # gets scheduled.
     runs-on: macos-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: platforms/macos
 
     steps:
       - uses: actions/checkout@v4
@@ -46,3 +49,42 @@ jobs:
           test -f "$APP/Contents/Resources/AppIcon.icns"
           plutil -lint "$APP/Contents/Info.plist"
           codesign --verify --strict --verbose=2 "$APP"
+
+  windows:
+    # windows-latest ships the MSVC toolchain, the Windows SDK and CMake, which
+    # is the whole dependency list — the port links only against libraries that
+    # come with the SDK.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: platforms/windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset ci
+
+      - name: Build
+        run: cmake --build --preset ci
+
+      # Same shape as the macOS suite: pure logic, so it needs no display, no
+      # GPU, no Media Foundation session and no media files. What it cannot
+      # cover on a runner is the WorkerW parenting and the decode path, both of
+      # which need a real desktop session.
+      - name: Test
+        run: ctest --preset ci --output-on-failure
+
+      - name: Check the executable is well formed
+        run: |
+          $exe = "out/build/ci/LiveWall.exe"
+          if (-not (Test-Path $exe)) { throw "no executable at $exe" }
+          "{0:N0} KB" -f ((Get-Item $exe).Length / 1KB)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiveWall-windows-x64
+          path: platforms/windows/out/build/ci/LiveWall.exe
+          if-no-files-found: error

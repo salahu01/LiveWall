@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+
+  <assemblyIdentity type="win32" name="Fegno.LiveWall" version="1.0.0.0"
+                    processorArchitecture="*"/>
+  <description>Low-power live wallpaper</description>
+
+  <!-- Per-monitor v2.
+       The wallpaper is sized in physical pixels on every display, and a mixed
+       -DPI setup is the normal case for a laptop with an external monitor. Under
+       system-DPI awareness Windows would hand back virtualised coordinates and
+       then bitmap-stretch the result, which is both blurry and a waste of the
+       decode. v2 (rather than v1) is what makes the non-client area and
+       WM_DPICHANGED behave on child windows. -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">permonitorv2</dpiAwareness>
+      <!-- UTF-8 for the ANSI code page, so the few places that touch narrow
+           strings (paths written into the JSON index) round-trip. -->
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+
+  <!-- Without these GUIDs the OS reports itself as Windows 8 to this process,
+       and the DWM and Media Foundation behaviours the app depends on are
+       version-gated. -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/> <!-- 10 / 11 -->
+      <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/> <!-- 8.1 -->
+      <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/> <!-- 8 -->
+    </application>
+  </compatibility>
+
+  <!-- asInvoker, never requireAdministrator. The app writes only to
+       %LOCALAPPDATA% and HKCU; asking for elevation would also mean the tray
+       icon lived in a different integrity level from Explorer, which breaks
+       drag-and-drop and the shell notification area in subtle ways. -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <!-- Visual styles for the file picker and the message boxes. -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls"
+                        version="6.0.0.0" processorArchitecture="*"
+                        publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+
+</assembly>
