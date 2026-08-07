@@ -80,15 +80,37 @@ void outputDone(void* data, wl_output* output) {
     }
 }
 
-void outputName(void* data, wl_output* output, const char* name) {
-    // wl_output version 4. Ignored: xdg_output.name carries the same string and
-    // is available at version 2, which is what this app binds.
-}
+// `name` and `description` arrived with wl_output version 4, which shipped in
+// libwayland 1.20. Older libwayland — 1.18 on Ubuntu 20.04, which is still a
+// supported LTS — declares a four-member listener, and initialising six there
+// is a hard error rather than a warning:
+//
+//     error: too many initializers for 'const wl_output_listener'
+//
+// wayland-client-protocol.h defines this macro only when the events exist, so
+// it is the version test that cannot drift from the header actually in use.
+// Nothing is lost when they are absent: both handlers are already no-ops,
+// because xdg_output.name carries the same string at xdg_output version 2,
+// which is what this app binds.
+#ifdef WL_OUTPUT_NAME_SINCE_VERSION
+
+void outputName(void* data, wl_output* output, const char* name) {}
 
 void outputDescription(void* data, wl_output* output, const char* description) {}
 
+#endif
+
+// Listed in the order the struct declares them — geometry, mode, done, scale —
+// which is not the order the protocol documents them in.
 const wl_output_listener kOutputListener = {
-    outputGeometry, outputMode, outputDone, outputScale, outputName, outputDescription,
+    outputGeometry,
+    outputMode,
+    outputDone,
+    outputScale,
+#ifdef WL_OUTPUT_NAME_SINCE_VERSION
+    outputName,
+    outputDescription,
+#endif
 };
 
 // --- xdg_output -------------------------------------------------------------
