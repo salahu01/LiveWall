@@ -22,7 +22,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(LiveWall
-    VERSION 1.0.0
+    VERSION 1.0.1
     DESCRIPTION "Low-power live wallpaper for Linux"
     # C as well as C++: wayland-scanner emits C, and the generated protocol
     # marshalling is compiled straight into the core library.

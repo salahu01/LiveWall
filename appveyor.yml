@@ -1,18 +1,23 @@
-# Windows CI on AppVeyor, which is free for public repositories.
+# Windows and Linux CI on AppVeyor, which is free for public repositories.
 #
-# This duplicates the `windows` job in .github/workflows/ci.yml rather than
-# replacing it. GitHub Actions is the intended home for every platform, but its
-# jobs refuse to start while the account is billing-locked, which left the
-# Windows port with no machine that could compile it at all. AppVeyor gives the
-# port a real MSVC build in the meantime; when Actions is unlocked the two run
-# the same commands and either one can be dropped.
+# This duplicates the `windows` and `linux` jobs in .github/workflows/ci.yml
+# rather than replacing them. GitHub Actions is the intended home for every
+# platform, but its jobs refuse to start while the account is billing-locked,
+# which left both ports with no machine that could compile them. AppVeyor builds
+# them in the meantime; when Actions is unlocked the two run the same commands
+# and either one can be dropped.
 #
-# The `Visual Studio 2022` image ships MSVC, the Windows SDK and CMake, which is
-# the whole dependency list. The `ci` preset overrides the Ninja generator it
-# inherits with `Visual Studio 17 2022`, so no Ninja install is needed either,
-# and fxc.exe for the shader step comes with the SDK.
+# macOS and Android are absent on purpose. AppVeyor's newest macOS image is
+# 10.15 Catalina, which cannot build a macOS 14 target, and the Android release
+# has to be signed with a keystore that exists only on the maintainer's machine.
+# Both are built there instead.
+#
+# The free tier allows one concurrent job, so the two images run in sequence
+# rather than side by side.
 
-image: Visual Studio 2022
+image:
+  - Visual Studio 2022
+  - Ubuntu2004
 
 # Nothing in the build reads history — it compiles the checkout as it stands.
 clone_depth: 1
@@ -21,38 +26,131 @@ clone_depth: 1
 # MSBuild detection has nothing to find and only gets in the way.
 build: off
 
-environment:
-  # Absolute, and re-derived in every step. The working directory persists
-  # across phases, so the first build's relative `cd platforms\windows` was
-  # still in effect when the next phase ran the same `cd` again — which failed
-  # with "The system cannot find the path specified" after a configure that had
-  # otherwise succeeded. An absolute path makes each step idempotent regardless
-  # of where the previous one left the shell.
-  WINDIR_SRC: $(APPVEYOR_BUILD_FOLDER)\platforms\windows
+for:
 
-before_build:
-  - cmd: cmake --version
-  - cmd: cd /d %WINDIR_SRC% && cmake --preset ci
+  # ---------------------------------------------------------------------------
+  # Windows
+  #
+  # The `Visual Studio 2022` image ships MSVC, the Windows SDK and CMake, which
+  # is the whole dependency list. The `ci` preset overrides the Ninja generator
+  # it inherits with `Visual Studio 17 2022`, so no Ninja install is needed
+  # either, and fxc.exe for the shader step comes with the SDK.
+  # ---------------------------------------------------------------------------
+  - matrix:
+      only:
+        - image: Visual Studio 2022
 
-build_script:
-  - cmd: cd /d %WINDIR_SRC% && cmake --build --preset ci
+    environment:
+      # Absolute, and re-derived in every step. The working directory persists
+      # across phases, so a relative `cd platforms\windows` was applied twice and
+      # failed with "The system cannot find the path specified" after a configure
+      # that had otherwise succeeded. An absolute path makes each step idempotent
+      # regardless of where the previous one left the shell.
+      WINDIR_SRC: $(APPVEYOR_BUILD_FOLDER)\platforms\windows
 
-# Same shape as the macOS and Linux suites: pure logic, so it needs no display,
-# no GPU, no Media Foundation session and no media files. What it cannot cover
-# on a build worker is the WorkerW parenting and the decode path, both of which
-# need a real desktop session.
-test_script:
-  - cmd: cd /d %WINDIR_SRC% && ctest --preset ci --output-on-failure
+    before_build:
+      - cmd: cmake --version
+      - cmd: cd /d %WINDIR_SRC% && cmake --preset ci
 
-# CMakeLists.txt flattens RUNTIME_OUTPUT_DIRECTORY_<CONFIG> onto the binary dir,
-# so the executable lands beside the cache rather than in a Release/ subfolder
-# the way a multi-config generator would otherwise place it.
-after_test:
-  - ps: |
-      $exe = Join-Path $env:APPVEYOR_BUILD_FOLDER "platforms\windows\out\build\ci\LiveWall.exe"
-      if (-not (Test-Path $exe)) { throw "no executable at $exe" }
-      "{0:N0} KB" -f ((Get-Item $exe).Length / 1KB)
+    build_script:
+      - cmd: cd /d %WINDIR_SRC% && cmake --build --preset ci
 
-artifacts:
-  - path: platforms\windows\out\build\ci\LiveWall.exe
-    name: LiveWall-windows-x64
+    # Pure logic, so it needs no display, no GPU, no Media Foundation session
+    # and no media files. What it cannot cover on a build worker is the WorkerW
+    # parenting and the decode path, both of which need a real desktop session.
+    test_script:
+      - cmd: cd /d %WINDIR_SRC% && ctest --preset ci --output-on-failure
+
+    # CMakeLists.txt flattens RUNTIME_OUTPUT_DIRECTORY_<CONFIG> onto the binary
+    # dir, so the executable lands beside the cache rather than in a Release/
+    # subfolder the way a multi-config generator would otherwise place it.
+    after_test:
+      - ps: |
+          $exe = Join-Path $env:APPVEYOR_BUILD_FOLDER "platforms\windows\out\build\ci\LiveWall.exe"
+          if (-not (Test-Path $exe)) { throw "no executable at $exe" }
+          "{0:N0} KB" -f ((Get-Item $exe).Length / 1KB)
+
+    artifacts:
+      - path: platforms\windows\out\build\ci\LiveWall.exe
+        name: LiveWall-windows-x64
+
+  # ---------------------------------------------------------------------------
+  # Linux
+  #
+  # Unlike the Windows job this one installs packages — but only headers and
+  # wayland-scanner. Everything optional at runtime (libav*, libva, libdbus,
+  # libXss) is opened with dlopen and never reaches the link line, which the
+  # "what it links against" step below verifies.
+  #
+  # Ubuntu 20.04 is the newest image AppVeyor offers, older than the
+  # ubuntu-latest that Actions uses. If a dependency turns out to be too old
+  # here, that is a property of this worker and not of the port.
+  # ---------------------------------------------------------------------------
+  - matrix:
+      only:
+        - image: Ubuntu2004
+
+    environment:
+      LINUX_SRC: $(APPVEYOR_BUILD_FOLDER)/platforms/linux
+
+    install:
+      - sh: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libx11-dev libxext-dev libxrandr-dev libxfixes-dev \
+            libegl-dev libgles-dev libwayland-dev wayland-protocols \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libva-dev libdbus-1-dev \
+            xvfb
+
+    before_build:
+      - sh: cmake --version
+      - sh: cd "$LINUX_SRC" && cmake --preset ci
+
+    build_script:
+      - sh: cd "$LINUX_SRC" && cmake --build --preset ci
+
+    test_script:
+      - sh: cd "$LINUX_SRC" && ctest --preset ci --output-on-failure
+
+    after_test:
+      # The whole dependency argument in one command. libav*, libva, libdbus and
+      # libXss must NOT appear here — if one does, an optional runtime dependency
+      # has quietly become a required one and the binary will refuse to start on
+      # a machine without it.
+      - sh: |
+          set -e
+          exe="$LINUX_SRC/out/build/ci/livewall"
+          test -x "$exe"
+          printf '%s KB\n' "$(( $(stat -c%s "$exe") / 1024 ))"
+          ldd "$exe"
+          if ldd "$exe" | grep -Eq 'libav(codec|format|util)|libswscale|libva|libdbus|libXss'; then
+            echo "a dlopen-only library ended up on the link line"
+            exit 1
+          fi
+
+      # The only place in this project's CI where the app actually runs. Every
+      # other suite is pure logic because no worker has a display; Xvfb gives
+      # this one a real X server, which catches an unusable binary, a broken
+      # control socket and a shader that does not compile.
+      - sh: |
+          set -e
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 3
+          export DISPLAY=:99
+          exe="$LINUX_SRC/out/build/ci/livewall"
+          "$exe" probe
+          LIVEWALL_VERBOSE=1 "$exe" &
+          sleep 5
+          "$exe" status
+          # Anything other than "Rendering" here means a gate fired on a headless
+          # runner, which would be a bug in the gate.
+          "$exe" status | grep -q '^state       Rendering'
+          "$exe" quit
+
+    artifacts:
+      - path: platforms/linux/out/build/ci/livewall
+        name: LiveWall-linux-x64
