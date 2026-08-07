@@ -1,0 +1,53 @@
+# Windows CI on AppVeyor, which is free for public repositories.
+#
+# This duplicates the `windows` job in .github/workflows/ci.yml rather than
+# replacing it. GitHub Actions is the intended home for every platform, but its
+# jobs refuse to start while the account is billing-locked, which left the
+# Windows port with no machine that could compile it at all. AppVeyor gives the
+# port a real MSVC build in the meantime; when Actions is unlocked the two run
+# the same commands and either one can be dropped.
+#
+# The `Visual Studio 2022` image ships MSVC, the Windows SDK and CMake, which is
+# the whole dependency list. The `ci` preset overrides the Ninja generator it
+# inherits with `Visual Studio 17 2022`, so no Ninja install is needed either,
+# and fxc.exe for the shader step comes with the SDK.
+
+image: Visual Studio 2022
+
+# Nothing in the build reads history — it compiles the checkout as it stands.
+clone_depth: 1
+
+# CMake drives its own configuration through the presets, so AppVeyor's built-in
+# MSBuild detection has nothing to find and only gets in the way.
+build: off
+
+environment:
+  # Every step runs here; AppVeyor has no per-job working-directory setting.
+  WINDIR_SRC: platforms\windows
+
+before_build:
+  - cmd: cmake --version
+  - cmd: cd %WINDIR_SRC% && cmake --preset ci
+
+build_script:
+  - cmd: cd %WINDIR_SRC% && cmake --build --preset ci
+
+# Same shape as the macOS and Linux suites: pure logic, so it needs no display,
+# no GPU, no Media Foundation session and no media files. What it cannot cover
+# on a build worker is the WorkerW parenting and the decode path, both of which
+# need a real desktop session.
+test_script:
+  - cmd: cd %WINDIR_SRC% && ctest --preset ci --output-on-failure
+
+# CMakeLists.txt flattens RUNTIME_OUTPUT_DIRECTORY_<CONFIG> onto the binary dir,
+# so the executable lands beside the cache rather than in a Release/ subfolder
+# the way a multi-config generator would otherwise place it.
+after_test:
+  - ps: |
+      $exe = "platforms\windows\out\build\ci\LiveWall.exe"
+      if (-not (Test-Path $exe)) { throw "no executable at $exe" }
+      "{0:N0} KB" -f ((Get-Item $exe).Length / 1KB)
+
+artifacts:
+  - path: platforms\windows\out\build\ci\LiveWall.exe
+    name: LiveWall-windows-x64
