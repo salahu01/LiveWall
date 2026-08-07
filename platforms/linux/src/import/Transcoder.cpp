@@ -244,7 +244,8 @@ std::optional<TranscodeResult> Transcoder::convert(const std::string& source,
         return std::nullopt;
     }
 
-    const AVCodec* decoderCodec = nullptr;
+    // See ffmpeg::FoundDecoder — const on FFmpeg 5+, not on 4.x.
+    ffmpeg::FoundDecoder decoderCodec = nullptr;
     const int streamIndex =
         av.find_best_stream(pipeline.input, AVMEDIA_TYPE_VIDEO, -1, -1, &decoderCodec, 0);
     if (streamIndex < 0 || decoderCodec == nullptr) {

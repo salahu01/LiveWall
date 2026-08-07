@@ -39,9 +39,38 @@ extern "C" {
 }
 
 #include <string>
+#include <type_traits>
 
 namespace livewall {
 namespace ffmpeg {
+
+namespace detail {
+
+// The type of a function's fifth parameter.
+template <typename Fn>
+struct FifthParameter;
+
+template <typename R, typename A0, typename A1, typename A2, typename A3, typename A4, typename A5>
+struct FifthParameter<R(A0, A1, A2, A3, A4, A5)> {
+    using type = A4;
+};
+
+}  // namespace detail
+
+// What `av_find_best_stream` writes its chosen decoder into.
+//
+// FFmpeg 5.0 made that parameter `const AVCodec**`; 4.x, which is what Ubuntu
+// 20.04 still ships, declares it `AVCodec**`. Passing the wrong one is an error
+// rather than a warning:
+//
+//     error: invalid conversion from 'const AVCodec**' to 'AVCodec**'
+//
+// Deducing it from the declaration in the headers actually being compiled
+// against is stronger than testing LIBAVFORMAT_VERSION_MAJOR: it cannot be
+// wrong about which release changed the signature, because it never asks.
+// Either way the result converts to `const AVCodec*` for everything downstream.
+using FoundDecoder =
+    std::remove_pointer_t<typename detail::FifthParameter<decltype(::av_find_best_stream)>::type>;
 
 struct Api {
     // --- libavutil ---

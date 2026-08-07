@@ -136,7 +136,8 @@ bool VideoSource::openDecoder() {
     }
     if (av.find_stream_info(format_, nullptr) < 0) return false;
 
-    const AVCodec* decoder = nullptr;
+    // See ffmpeg::FoundDecoder — const on FFmpeg 5+, not on 4.x.
+    ffmpeg::FoundDecoder decoder = nullptr;
     streamIndex_ = av.find_best_stream(format_, AVMEDIA_TYPE_VIDEO, -1, -1, &decoder, 0);
     if (streamIndex_ < 0 || decoder == nullptr) return false;
 
