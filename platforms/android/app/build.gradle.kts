@@ -1,7 +1,29 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
 }
+
+// Release signing is optional and entirely out-of-tree. The keystore and its
+// passwords live in a properties file outside the repository, named by the
+// `livewall.keyProperties` Gradle property or the LIVEWALL_KEY_PROPERTIES
+// environment variable; `key.properties` beside this module works too and is
+// gitignored. With none of them present — which is the case on CI and on a
+// fresh clone — the release build stays unsigned and is named
+// `app-release-unsigned.apk`, exactly as before.
+val keyPropertiesFile: File =
+    (providers.gradleProperty("livewall.keyProperties").orNull
+        ?: System.getenv("LIVEWALL_KEY_PROPERTIES"))
+        ?.let { path -> File(path) }
+        ?: rootProject.file("key.properties")
+
+val keyProperties: Properties? =
+    if (keyPropertiesFile.isFile) {
+        Properties().also { loaded -> keyPropertiesFile.inputStream().use(loaded::load) }
+    } else {
+        null
+    }
 
 android {
     namespace = "com.fegno.livewall"
@@ -19,8 +41,26 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        keyProperties?.let { props ->
+            create("release") {
+                storeFile = file(props.getProperty("storeFile"))
+                storePassword = props.getProperty("storePassword")
+                keyAlias = props.getProperty("keyAlias")
+                keyPassword = props.getProperty("keyPassword")
+                // minSdk is 29, so every device that can install this verifies
+                // v3. JAR signing is off because it would only add a second,
+                // weaker representation of the same key that nothing reads.
+                enableV1Signing = false
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

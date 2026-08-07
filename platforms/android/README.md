@@ -232,7 +232,28 @@ encoder, a muxer and an EGL context, and all three belong to the device; that
 test lives in `androidTest` and asserts the shape of the output rather than its
 timing.
 
-The release APK is unsigned. To install it, sign it with your own key:
+### Signing
+
+A release build signs itself only if it is pointed at a keystore, and nothing
+about that keystore lives in this repository. Write the four properties
+somewhere outside the tree:
+
+```properties
+storePassword=…
+keyPassword=…
+keyAlias=livewall
+storeFile=/absolute/path/to/livewall.keystore
+```
+
+and name that file with either the `livewall.keyProperties` Gradle property —
+`~/.gradle/gradle.properties` is the usual home for it — or the
+`LIVEWALL_KEY_PROPERTIES` environment variable. A gitignored `key.properties`
+beside `settings.gradle.kts` works too. The output is then
+`app/build/outputs/apk/release/app-release.apk`, signed with v3.
+
+With no keystore configured — a fresh clone, and CI — the release build still
+succeeds and produces `app-release-unsigned.apk`, which cannot be installed
+until you sign it:
 
 ```sh
 apksigner sign --ks <keystore> --out LiveWall.apk \
