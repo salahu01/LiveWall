@@ -24,7 +24,7 @@ clone_depth: 1
 
 # CMake drives its own configuration through the presets, so AppVeyor's built-in
 # MSBuild detection has nothing to find and only gets in the way.
-build: off
+build: false
 
 for:
 
@@ -90,29 +90,43 @@ for:
       only:
         - image: Ubuntu2004
 
-    environment:
-      LINUX_SRC: $(APPVEYOR_BUILD_FOLDER)/platforms/linux
+    # $(VAR) is AppVeyor's own interpolation and is expanded for cmd, but reaches
+    # bash literally — the first run tried to cd into a directory named
+    # "$(APPVEYOR_BUILD_FOLDER)/platforms/linux". The Linux steps use the plain
+    # shell variable instead.
 
     install:
       - sh: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build pkg-config \
+            build-essential ninja-build pkg-config \
             libx11-dev libxext-dev libxrandr-dev libxfixes-dev \
             libegl-dev libgles-dev libwayland-dev wayland-protocols \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libva-dev libdbus-1-dev \
             xvfb
 
+      # Ubuntu 20.04 ships CMake 3.16, and this project needs 3.21 — both for
+      # `cmake_minimum_required` and because CMakePresets v3 is a 3.21 feature.
+      # Kitware's own binary tarball is the least surprising way to get one: no
+      # apt key to trust, no PPA to go stale, and it lands on PATH ahead of the
+      # packaged copy.
+      - sh: |
+          set -e
+          CMAKE_VERSION=3.28.3
+          curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
+            | sudo tar -xz --strip-components=1 -C /usr/local
+          hash -r
+
     before_build:
       - sh: cmake --version
-      - sh: cd "$LINUX_SRC" && cmake --preset ci
+      - sh: cd "$APPVEYOR_BUILD_FOLDER/platforms/linux" && cmake --preset ci
 
     build_script:
-      - sh: cd "$LINUX_SRC" && cmake --build --preset ci
+      - sh: cd "$APPVEYOR_BUILD_FOLDER/platforms/linux" && cmake --build --preset ci
 
     test_script:
-      - sh: cd "$LINUX_SRC" && ctest --preset ci --output-on-failure
+      - sh: cd "$APPVEYOR_BUILD_FOLDER/platforms/linux" && ctest --preset ci --output-on-failure
 
     after_test:
       # The whole dependency argument in one command. libav*, libva, libdbus and
@@ -121,7 +135,7 @@ for:
       # a machine without it.
       - sh: |
           set -e
-          exe="$LINUX_SRC/out/build/ci/livewall"
+          exe="$APPVEYOR_BUILD_FOLDER/platforms/linux/out/build/ci/livewall"
           test -x "$exe"
           printf '%s KB\n' "$(( $(stat -c%s "$exe") / 1024 ))"
           ldd "$exe"
@@ -141,7 +155,7 @@ for:
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 3
           export DISPLAY=:99
-          exe="$LINUX_SRC/out/build/ci/livewall"
+          exe="$APPVEYOR_BUILD_FOLDER/platforms/linux/out/build/ci/livewall"
           "$exe" probe
           LIVEWALL_VERBOSE=1 "$exe" &
           sleep 5
