@@ -111,9 +111,15 @@ TEST_CASE("a request above the refresh rate is capped by it") {
 }
 
 TEST_CASE("nothing snaps below 12 fps") {
-    // 13 Hz is absurd, and there is no divisor at or above 12 — the cure would
-    // be worse than the judder, so the preferred rate is returned unchanged.
-    CHECK_EQ(Transcoder::pacedFPS(24, 13), 24);
+    // 121 Hz has no divisor between 12 and 24, so the search walks down to the
+    // floor and gives up: below 12 fps the cure is worse than the judder, and
+    // the preferred rate is returned unchanged.
+    //
+    // The refresh has to exceed the preferred rate for this path to be
+    // reachable at all. When it does not, the search starts at the refresh
+    // itself, which always divides itself — pacedFPS(24, 13) is 13, not 24,
+    // because a 13 Hz panel cannot present 24 fps however the floor is drawn.
+    CHECK_EQ(Transcoder::pacedFPS(24, 121), 24);
 }
 
 TEST_CASE("degenerate inputs return something playable") {
