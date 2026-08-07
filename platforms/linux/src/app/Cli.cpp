@@ -98,20 +98,62 @@ void reportProgress(double fraction) {
     std::fflush(stderr);
 }
 
+// Pulls `--fps N` and `--rotate D` out of `arguments`, leaving the positional
+// words behind.
+//
+// Frame rate and rotation are flags rather than positions because they belong to
+// one video rather than to the library — a clip shot sideways needs a turn the
+// next one will not — and because both are usually omitted. An unparseable or
+// missing value leaves the field at zero, which means "no opinion": the preset's
+// rate applies and the frame is left upright.
+std::vector<std::string> takeImportOptions(const std::vector<std::string>& arguments,
+                                           ImportOptions* options) {
+    std::vector<std::string> positional;
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        const std::string& word = arguments[index];
+        const bool hasValue = index + 1 < arguments.size();
+
+        if (word == "--fps" && hasValue) {
+            options->fps = std::atoi(arguments[++index].c_str());
+        } else if (word == "--rotate" && hasValue) {
+            options->rotationDegrees = std::atoi(arguments[++index].c_str());
+        } else {
+            positional.push_back(word);
+        }
+    }
+    return positional;
+}
+
+// Rejects an angle that is not a whole quarter turn, which this port cannot
+// perform: an arbitrary angle needs a resampling filter and a decision about
+// cropping, and rotating to the nearest quarter instead would be a worse answer
+// than saying so.
+bool checkRotation(const ImportOptions& options) {
+    if (options.isQuarterTurn()) return true;
+    std::fprintf(stderr, "--rotate takes 0, 90, 180 or 270, not %d\n", options.rotationDegrees);
+    return false;
+}
+
 int convertCommand(const std::vector<std::string>& arguments) {
-    if (arguments.size() < 3) {
-        std::fputs("usage: livewall convert <source> <destination.mp4> [ultra|balanced|native]\n",
+    ImportOptions options;
+    const std::vector<std::string> words = takeImportOptions(arguments, &options);
+
+    if (words.size() < 3) {
+        std::fputs("usage: livewall convert <source> <destination.mp4> [ultra|balanced|native] "
+                   "[--fps N] [--rotate 0|90|180|270]\n",
                    stderr);
         return 2;
     }
+    if (!checkRotation(options)) return 2;
 
-    const std::string source = paths::absolute(arguments[1]);
-    const std::string destination = paths::absolute(arguments[2]);
+    const std::string source = paths::absolute(words[1]);
+    const std::string destination = paths::absolute(words[2]);
     const TranscodePreset& preset =
-        arguments.size() > 3 ? Transcoder::presetNamed(arguments[3]) : Transcoder::defaultPreset();
+        words.size() > 3 ? Transcoder::presetNamed(words[3]) : Transcoder::defaultPreset();
 
     const std::optional<TranscodeResult> result =
-        Transcoder::convert(source, destination, preset, askDisplayTarget(), reportProgress);
+        Transcoder::convert(source, destination, preset, askDisplayTarget(), options,
+                            reportProgress);
     std::fputc('\n', stderr);
 
     if (!result.has_value()) return 1;
@@ -122,20 +164,26 @@ int convertCommand(const std::vector<std::string>& arguments) {
 }
 
 int addCommand(const std::vector<std::string>& arguments) {
-    if (arguments.size() < 2) {
-        std::fputs("usage: livewall add <video> [ultra|balanced|native]\n", stderr);
+    ImportOptions options;
+    const std::vector<std::string> words = takeImportOptions(arguments, &options);
+
+    if (words.size() < 2) {
+        std::fputs("usage: livewall add <video> [ultra|balanced|native] "
+                   "[--fps N] [--rotate 0|90|180|270]\n",
+                   stderr);
         return 2;
     }
+    if (!checkRotation(options)) return 2;
 
-    const std::string source = paths::absolute(arguments[1]);
+    const std::string source = paths::absolute(words[1]);
     if (!paths::fileExists(source)) {
         std::fprintf(stderr, "no such file: %s\n", source.c_str());
         return 1;
     }
 
     Library library;
-    const TranscodePreset& preset = arguments.size() > 2
-                                        ? Transcoder::presetNamed(arguments[2])
+    const TranscodePreset& preset = words.size() > 2
+                                        ? Transcoder::presetNamed(words[2])
                                         : Transcoder::presetNamed(library.presetName());
 
     const std::string id = newGuidString();
@@ -149,7 +197,8 @@ int addCommand(const std::vector<std::string>& arguments) {
                  paths::filename(source).c_str(), preset.name.c_str(), preset.summary().c_str());
 
     const std::optional<TranscodeResult> result =
-        Transcoder::convert(source, destination, preset, askDisplayTarget(), reportProgress);
+        Transcoder::convert(source, destination, preset, askDisplayTarget(), options,
+                            reportProgress);
     std::fputc('\n', stderr);
 
     if (!result.has_value()) return 1;

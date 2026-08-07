@@ -14,6 +14,7 @@ add_executable(livewall_tests
     PacingTests.cpp
     OutputSizeTests.cpp
     IndexTests.cpp
+    RotationTests.cpp
 )
 
 target_include_directories(livewall_tests PRIVATE .)
@@ -22,6 +23,7 @@ livewall_set_target_defaults(livewall_tests)
 
 # One ctest entry per area, so a failure names the thing that broke rather than
 # "the test binary".
-foreach(suite coverage pacing paced_fps output_size fit presets index json guid strings)
+foreach(suite coverage pacing paced_fps output_size fit presets index json guid strings
+               import_options rotation)
     add_test(NAME ${suite} COMMAND livewall_tests ${suite})
 endforeach()

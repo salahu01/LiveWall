@@ -6,6 +6,8 @@
 #include "import/CodecSupport.h"
 #include "import/FFmpeg.h"
 #include "import/FramePacer.h"
+#include "import/FrameRotate.h"
+#include "import/ImportOptions.h"
 #include "support/Log.h"
 #include "support/Paths.h"
 #include "support/Strings.h"
@@ -34,6 +36,11 @@ struct Pipeline {
     AVPacket* encoded = nullptr;
     AVFrame* decoded = nullptr;
     AVFrame* converted = nullptr;
+    // Only allocated when the import is rotated. swscale writes the frame at its
+    // pre-rotation geometry here, and `rotatePlane` turns it into `converted`.
+    // Scaling first and rotating second keeps Lanczos working on the larger
+    // image and leaves the rotation a pure memory move.
+    AVFrame* upright = nullptr;
     AVFrame* hardware = nullptr;
     SwsContext* scaler = nullptr;
 
@@ -44,6 +51,7 @@ struct Pipeline {
         if (scaler != nullptr) av.sws_free_context(scaler);
         if (decoded != nullptr) av.frame_free(&decoded);
         if (converted != nullptr) av.frame_free(&converted);
+        if (upright != nullptr) av.frame_free(&upright);
         if (hardware != nullptr) av.frame_free(&hardware);
         if (packet != nullptr) av.packet_free(&packet);
         if (encoded != nullptr) av.packet_free(&encoded);
@@ -121,6 +129,48 @@ bool drainEncoder(Pipeline& pipeline, AVStream* stream, bool* failed) {
             return false;
         }
     }
+}
+
+// Turns every plane of `source` into `destination`, clockwise by `degrees`.
+//
+// The per-plane geometry comes from the pixel format's descriptor rather than a
+// table of formats this port happens to use today: chroma planes are subsampled
+// by the descriptor's log2 factors, and one sample position occupies the widest
+// `step` of the components stored in that plane — which is 1 for yuv420p, 2 for
+// yuv420p10le and nv12's interleaved U+V pair, and 4 for p010le's. Everything at
+// a position travels together, which is what lets the interleaved formats rotate
+// with no special case.
+bool rotateFrame(const ffmpeg::Api& av, const AVFrame* source, AVFrame* destination,
+                 int degrees) {
+    const AVPixFmtDescriptor* descriptor =
+        av.pix_fmt_desc_get(static_cast<AVPixelFormat>(source->format));
+    if (descriptor == nullptr) return false;
+
+    int planeCount = 0;
+    int elementBytes[AV_NUM_DATA_POINTERS] = {0};
+    for (int index = 0; index < descriptor->nb_components; ++index) {
+        const AVComponentDescriptor& component = descriptor->comp[index];
+        if (component.plane < 0 || component.plane >= AV_NUM_DATA_POINTERS) return false;
+        planeCount = std::max(planeCount, component.plane + 1);
+        elementBytes[component.plane] = std::max(elementBytes[component.plane], component.step);
+    }
+
+    for (int plane = 0; plane < planeCount; ++plane) {
+        if (source->data[plane] == nullptr || destination->data[plane] == nullptr) return false;
+
+        // Plane 0 carries luma at full resolution; the rest are subsampled.
+        const int shiftX = plane == 0 ? 0 : descriptor->log2_chroma_w;
+        const int shiftY = plane == 0 ? 0 : descriptor->log2_chroma_h;
+
+        PlaneGeometry geometry;
+        geometry.width = AV_CEIL_RSHIFT(source->width, shiftX);
+        geometry.height = AV_CEIL_RSHIFT(source->height, shiftY);
+        geometry.elementBytes = std::max(1, elementBytes[plane]);
+
+        rotatePlane(source->data[plane], source->linesize[plane], geometry,
+                    destination->data[plane], destination->linesize[plane], degrees);
+    }
+    return true;
 }
 
 // Hands one converted frame to the encoder, uploading it first when the encoder
@@ -224,6 +274,7 @@ std::optional<TranscodeResult> Transcoder::convert(const std::string& source,
                                                    const std::string& destination,
                                                    const TranscodePreset& preset,
                                                    const DisplayTarget& display,
+                                                   const ImportOptions& options,
                                                    const ProgressFn& progress) {
     if (!ffmpeg::load()) {
         Log::error("no FFmpeg, so nothing can be imported");
@@ -269,18 +320,39 @@ std::optional<TranscodeResult> Transcoder::convert(const std::string& source,
     const int sourceHeight = pipeline.decoder->height;
     if (sourceWidth <= 0 || sourceHeight <= 0) return std::nullopt;
 
+    const int turn = ImportOptions::normalised(options.rotationDegrees);
+    if (!options.isQuarterTurn()) {
+        Log::error(format("%d degrees is not a quarter turn — importing upright", turn));
+    }
+    const bool rotates = options.isQuarterTurn() && turn != 0;
+    const bool swapsEdges = options.isQuarterTurn() && options.swapsEdges();
+
+    // Size against the edges the frame will actually have once turned. A
+    // 1920x1080 clip rotated a quarter turn is a portrait clip, and sizing it as
+    // landscape would fit the wrong edge to `maxEdge`.
     int outputWidth = 0;
     int outputHeight = 0;
-    outputSize(sourceWidth, sourceHeight, preset, display, &outputWidth, &outputHeight);
+    outputSize(swapsEdges ? sourceHeight : sourceWidth, swapsEdges ? sourceWidth : sourceHeight,
+               preset, display, &outputWidth, &outputHeight);
+
+    // What swscale produces, before the turn. For a quarter turn that is the
+    // output with its edges swapped back.
+    const int scaledWidth = swapsEdges ? outputHeight : outputWidth;
+    const int scaledHeight = swapsEdges ? outputWidth : outputHeight;
 
     // Never upsample the frame rate past the source, then land on a rate the
-    // display can present evenly.
+    // display can present evenly. The user's chosen rate is the input to both
+    // rules rather than an exemption from either.
     int sourceFps = 0;
     if (inputStream->avg_frame_rate.den > 0 && inputStream->avg_frame_rate.num > 0) {
         sourceFps = static_cast<int>(std::lround(static_cast<double>(inputStream->avg_frame_rate.num) /
                                                  inputStream->avg_frame_rate.den));
     }
-    const int capped = sourceFps > 0 ? std::min(preset.fps, sourceFps) : preset.fps;
+    const int preferred = options.preferredFps(preset.fps);
+    const int capped = sourceFps > 0 ? std::min(preferred, sourceFps) : preferred;
+    if (capped != preferred) {
+        Log::info(format("capped %d fps to the source's %d", preferred, capped));
+    }
     const int fps = std::max(1, pacedFps(capped, display.refreshHz > 0 ? display.refreshHz : 60));
     if (fps != capped) {
         Log::info(format("paced %d fps down to %d to divide a %d Hz display evenly", capped, fps,
@@ -391,6 +463,34 @@ std::optional<TranscodeResult> Transcoder::convert(const std::string& source,
         return std::nullopt;
     }
 
+    // The rotation reads from a second buffer rather than turning `converted` in
+    // place: a quarter turn is not an in-place operation on a non-square image,
+    // and a half turn in place would need the same care for no saving.
+    if (rotates) {
+        pipeline.upright = av.frame_alloc();
+        if (pipeline.upright == nullptr) return std::nullopt;
+        pipeline.upright->format = choice->pixelFormat;
+        pipeline.upright->width = scaledWidth;
+        pipeline.upright->height = scaledHeight;
+        if (av.frame_get_buffer(pipeline.upright, 0) < 0) {
+            Log::error("cannot allocate the rotation buffer");
+            return std::nullopt;
+        }
+
+        // 4:2:0 and 4:4:4 subsample both axes equally, so a quarter turn maps
+        // chroma positions onto chroma positions. A format that subsampled one
+        // axis only — 4:2:2 — would need the planes resampled, not moved, and
+        // this port encodes to no such format. Refusing beats writing a frame
+        // whose chroma is transposed against its luma.
+        const AVPixFmtDescriptor* descriptor =
+            av.pix_fmt_desc_get(static_cast<AVPixelFormat>(choice->pixelFormat));
+        if (descriptor == nullptr ||
+            (swapsEdges && descriptor->log2_chroma_w != descriptor->log2_chroma_h)) {
+            Log::error("this encoder's pixel format cannot be rotated a quarter turn");
+            return std::nullopt;
+        }
+    }
+
     const double totalSeconds =
         pipeline.input->duration > 0 ? static_cast<double>(pipeline.input->duration) / AV_TIME_BASE
                                      : 0.0;
@@ -442,7 +542,7 @@ std::optional<TranscodeResult> Transcoder::convert(const std::string& source,
             if (pipeline.scaler == nullptr) {
                 pipeline.scaler = av.sws_get_context(
                     pipeline.decoded->width, pipeline.decoded->height,
-                    static_cast<AVPixelFormat>(pipeline.decoded->format), outputWidth, outputHeight,
+                    static_cast<AVPixelFormat>(pipeline.decoded->format), scaledWidth, scaledHeight,
                     static_cast<AVPixelFormat>(choice->pixelFormat),
                     // Lanczos, not bilinear. This runs once per imported file
                     // and the result is looked at for months; bilinear
@@ -455,9 +555,17 @@ std::optional<TranscodeResult> Transcoder::convert(const std::string& source,
                 }
             }
 
+            // Scale into whichever buffer the turn reads from — `converted`
+            // directly when upright, the pre-rotation buffer otherwise.
+            AVFrame* const scaled = rotates ? pipeline.upright : pipeline.converted;
             av.sws_scale(pipeline.scaler, pipeline.decoded->data, pipeline.decoded->linesize, 0,
-                         pipeline.decoded->height, pipeline.converted->data,
-                         pipeline.converted->linesize);
+                         pipeline.decoded->height, scaled->data, scaled->linesize);
+
+            if (rotates && !rotateFrame(av, pipeline.upright, pipeline.converted, turn)) {
+                Log::error("cannot rotate this frame's pixel format");
+                failed = true;
+                break;
+            }
             pipeline.converted->pts = outputIndex;
 
             if (!submitFrame(pipeline, pipeline.converted)) {

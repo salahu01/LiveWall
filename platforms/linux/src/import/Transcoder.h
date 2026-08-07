@@ -28,6 +28,8 @@
 #include <string_view>
 #include <vector>
 
+#include "import/ImportOptions.h"
+
 namespace livewall {
 
 // Measured on the other two ports against their real playback paths, and the
@@ -89,6 +91,7 @@ public:
                                                   const std::string& destination,
                                                   const TranscodePreset& preset,
                                                   const DisplayTarget& display,
+                                                  const ImportOptions& options,
                                                   const ProgressFn& progress);
 
     static const std::vector<TranscodePreset>& presets();
