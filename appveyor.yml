@@ -22,29 +22,34 @@ clone_depth: 1
 build: off
 
 environment:
-  # Every step runs here; AppVeyor has no per-job working-directory setting.
-  WINDIR_SRC: platforms\windows
+  # Absolute, and re-derived in every step. The working directory persists
+  # across phases, so the first build's relative `cd platforms\windows` was
+  # still in effect when the next phase ran the same `cd` again — which failed
+  # with "The system cannot find the path specified" after a configure that had
+  # otherwise succeeded. An absolute path makes each step idempotent regardless
+  # of where the previous one left the shell.
+  WINDIR_SRC: $(APPVEYOR_BUILD_FOLDER)\platforms\windows
 
 before_build:
   - cmd: cmake --version
-  - cmd: cd %WINDIR_SRC% && cmake --preset ci
+  - cmd: cd /d %WINDIR_SRC% && cmake --preset ci
 
 build_script:
-  - cmd: cd %WINDIR_SRC% && cmake --build --preset ci
+  - cmd: cd /d %WINDIR_SRC% && cmake --build --preset ci
 
 # Same shape as the macOS and Linux suites: pure logic, so it needs no display,
 # no GPU, no Media Foundation session and no media files. What it cannot cover
 # on a build worker is the WorkerW parenting and the decode path, both of which
 # need a real desktop session.
 test_script:
-  - cmd: cd %WINDIR_SRC% && ctest --preset ci --output-on-failure
+  - cmd: cd /d %WINDIR_SRC% && ctest --preset ci --output-on-failure
 
 # CMakeLists.txt flattens RUNTIME_OUTPUT_DIRECTORY_<CONFIG> onto the binary dir,
 # so the executable lands beside the cache rather than in a Release/ subfolder
 # the way a multi-config generator would otherwise place it.
 after_test:
   - ps: |
-      $exe = "platforms\windows\out\build\ci\LiveWall.exe"
+      $exe = Join-Path $env:APPVEYOR_BUILD_FOLDER "platforms\windows\out\build\ci\LiveWall.exe"
       if (-not (Test-Path $exe)) { throw "no executable at $exe" }
       "{0:N0} KB" -f ((Get-Item $exe).Length / 1KB)
 
