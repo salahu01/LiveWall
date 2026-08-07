@@ -17,7 +17,7 @@
 namespace livewall {
 namespace {
 
-constexpr const char* kVersion = "1.0.1";
+constexpr const char* kVersion = "1.0.2";
 
 // Commands that are just "send this line and print what comes back". Listed so
 // that an unknown one is rejected here, with the usage text, rather than

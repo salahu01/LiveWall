@@ -29,7 +29,7 @@
 #define IDM_WALLPAPER_FIRST     41000
 #define IDM_WALLPAPER_LAST      45095
 
-#define VER_FILEVERSION         1,0,1,0
-#define VER_FILEVERSION_STR     "1.0.1.0"
-#define VER_PRODUCTVERSION      1,0,1,0
-#define VER_PRODUCTVERSION_STR  "1.0.1"
+#define VER_FILEVERSION         1,0,2,0
+#define VER_FILEVERSION_STR     "1.0.2.0"
+#define VER_PRODUCTVERSION      1,0,2,0
+#define VER_PRODUCTVERSION_STR  "1.0.2"

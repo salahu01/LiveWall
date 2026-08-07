@@ -9,11 +9,29 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${1:-release}"
 APP="$ROOT/build/LiveWall.app"
 
-echo "==> Building ($CONFIG)"
-cd "$ROOT"
-swift build -c "$CONFIG"
+# Both architectures, always.
+#
+# macOS 14 is the deployment target and Sonoma still runs on the 2018-2020 Intel
+# machines, so a build for the host architecture alone silently excludes Macs
+# that meet the stated requirement — and does it in a way nothing catches: the
+# app assembles, signs and verifies, and then refuses to launch on the one
+# machine that cannot be tested from an Apple silicon host.
+#
+# Set LIVEWALL_ARCHS to override (`LIVEWALL_ARCHS=arm64` halves the link time
+# during ordinary development).
+ARCHS="${LIVEWALL_ARCHS:-arm64 x86_64}"
+ARCH_FLAGS=()
+for arch in $ARCHS; do
+    ARCH_FLAGS+=(--arch "$arch")
+done
 
-BIN="$ROOT/.build/$CONFIG/LiveWall"
+echo "==> Building ($CONFIG, ${ARCHS// /+})"
+cd "$ROOT"
+swift build -c "$CONFIG" "${ARCH_FLAGS[@]}"
+
+# A multi-arch build lands in a per-target directory rather than
+# .build/<config>/, so ask SwiftPM where it put things instead of guessing.
+BIN="$(swift build -c "$CONFIG" "${ARCH_FLAGS[@]}" --show-bin-path)/LiveWall"
 [ -f "$BIN" ] || { echo "build produced no binary at $BIN" >&2; exit 1; }
 
 echo "==> Assembling $APP"
@@ -42,6 +60,10 @@ else
     echo "    The app falls back to the Core Animation gradient, which is cheaper anyway."
     echo "    To enable the Metal shader mode: xcodebuild -downloadComponent MetalToolchain"
 fi
+
+# States what actually shipped. A missing slice is otherwise invisible until
+# someone opens the app on the architecture that is absent.
+echo "==> Architectures: $(lipo -archs "$APP/Contents/MacOS/LiveWall")"
 
 # Distribution needs a Developer ID identity, the hardened runtime and a
 # timestamp; Gatekeeper rejects an ad-hoc signature on any machine but the one

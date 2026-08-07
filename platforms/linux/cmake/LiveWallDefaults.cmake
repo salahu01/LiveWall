@@ -44,6 +44,23 @@ function(livewall_set_target_defaults target)
         -Wl,-z,relro
         -Wl,-z,now
         -Wl,--no-undefined
+
+        # The C++ runtime goes in the binary rather than being asked of the
+        # system. Without this the floor is not the distro the binary was built
+        # on but the compiler it was built with: a GCC 11 toolchain emits
+        # references to GLIBCXX_3.4.29, so a binary built on Ubuntu 20.04 with a
+        # newer GCC still refuses to start on a stock Ubuntu 20.04, with
+        #
+        #     version `GLIBCXX_3.4.29' not found
+        #
+        # and nothing about that is visible on the machine that built it.
+        #
+        # It costs roughly a megabyte after --gc-sections, which is the same
+        # trade the rest of this file already makes: everything optional is
+        # dlopen'd, everything required is carried. glibc itself stays dynamic —
+        # static glibc breaks dlopen and NSS, which this app depends on.
+        -static-libstdc++
+        -static-libgcc
     )
 endfunction()
 

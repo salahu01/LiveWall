@@ -144,6 +144,27 @@ for:
             exit 1
           fi
 
+      # The other half of the same argument, and the one that is invisible on
+      # the machine that built the binary: how old a system it will start on.
+      #
+      # libstdc++ is linked statically, so the only floor left is glibc. If
+      # libstdc++ ever reappears here the binary silently stops working on any
+      # distro older than the compiler that built it — which is how a build on
+      # Ubuntu 20.04 ended up requiring GLIBCXX_3.4.29 and refusing to run on
+      # Ubuntu 20.04.
+      - sh: |
+          set -e
+          exe="$APPVEYOR_BUILD_FOLDER/platforms/linux/out/build/ci/livewall"
+          if ldd "$exe" | grep -q 'libstdc++'; then
+            echo "libstdc++ is dynamic again — the binary now needs the build machine's GCC runtime"
+            exit 1
+          fi
+          if objdump -T "$exe" | grep -q GLIBCXX_; then
+            echo "the binary still references GLIBCXX_ versions"
+            exit 1
+          fi
+          echo "glibc floor: $(objdump -T "$exe" | grep -oE 'GLIBC_2\.[0-9]+' | sort -t. -k2 -n -u | tail -1)"
+
       # The only place in this project's CI where the app actually runs. Every
       # other suite is pure logic because no worker has a display; Xvfb gives
       # this one a real X server, which catches an unusable binary, a broken
