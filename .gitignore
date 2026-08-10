@@ -8,8 +8,10 @@ Package.resolved
 # build; install to /Applications with tools/install.sh instead.
 build/
 
-# CMake build products (platforms/windows)
+# CMake build products (platforms/windows). The icons are drawn at configure
+# time by tools/make-icon.ps1 — generated, so never committed as binaries.
 out/
+platforms/windows/res/*.ico
 CMakeUserPresets.json
 *.vcxproj
 *.vcxproj.filters
