@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Draws res/AppIcon.ico and res/TrayIcon.ico.
 
@@ -169,4 +169,4 @@ Write-Icon -Bitmaps $trayBitmaps -Path (Join-Path $resources 'TrayIcon.ico')
 $trayBitmaps | ForEach-Object { $_.Dispose() }
 
 Write-Host ""
-Write-Host "Wrote res/AppIcon.ico and res/TrayIcon.ico — rebuild to embed them." -ForegroundColor Green
+Write-Host "Wrote res/AppIcon.ico and res/TrayIcon.ico - rebuild to embed them." -ForegroundColor Green

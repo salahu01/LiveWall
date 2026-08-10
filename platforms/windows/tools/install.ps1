@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Builds LiveWall and installs it to %LOCALAPPDATA%\Programs\LiveWall.
 
@@ -39,7 +39,7 @@ if (-not $SkipBuild) {
 }
 
 if (-not (Test-Path $source)) {
-    throw "no executable at $source — run tools/build.ps1 first"
+    throw "no executable at $source - run tools/build.ps1 first"
 }
 
 # Replacing a running copy leaves the old process attached to a deleted file,
@@ -62,5 +62,5 @@ Start-Process -FilePath (Join-Path $target 'LiveWall.exe')
 
 Write-Host ""
 Write-Host "Installed: $target\LiveWall.exe" -ForegroundColor Green
-Write-Host "Enable 'Start with Windows' from the tray menu — it will now survive a rebuild,"
+Write-Host "Enable 'Start with Windows' from the tray menu - it will now survive a rebuild,"
 Write-Host "because this copy is not the one build.ps1 overwrites."

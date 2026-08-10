@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Samples LiveWall's real cost, so the low-resource claim is checkable rather
     than asserted.
@@ -36,7 +36,7 @@ if (-not $process) {
     exit 1
 }
 
-Write-Host ("pid {0} — {1} samples, {2}s apart" -f $process.Id, $Samples, $IntervalSeconds)
+Write-Host ("pid {0} - {1} samples, {2}s apart" -f $process.Id, $Samples, $IntervalSeconds)
 Write-Host ("{0,8}  {1,12}  {2,8}" -f 'sample', 'working set', 'cpu%')
 
 $previousCpu = $process.TotalProcessorTime
