@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Draws res/AppIcon.ico and res/TrayIcon.ico.
 
@@ -32,7 +32,7 @@ function New-AppBitmap {
     $bitmap = New-Object System.Drawing.Bitmap($Size, $Size,
         [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.SmoothingMode = [System.Drawing.Drawing2D]::SmoothingMode::AntiAlias
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $graphics.Clear([System.Drawing.Color]::Transparent)
 
     $inset = [Math]::Max(1, [int]($Size * 0.06))
@@ -80,7 +80,7 @@ function New-TrayBitmap {
     $bitmap = New-Object System.Drawing.Bitmap($Size, $Size,
         [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.SmoothingMode = [System.Drawing.Drawing2D]::SmoothingMode::AntiAlias
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $graphics.Clear([System.Drawing.Color]::Transparent)
 
     # White with alpha, so it reads on both a light and a dark taskbar — the
@@ -104,7 +104,7 @@ function New-TrayBitmap {
         $y = $rect.Y + $rect.Height * (0.5 + 0.22 * [Math]::Sin($t * 2 * [Math]::PI))
         $points += New-Object System.Drawing.PointF([float]$x, [float]$y)
     }
-    $wave.AddCurve($points)
+    $wave.AddCurve([System.Drawing.PointF[]]$points)
     $graphics.DrawPath($pen, $wave)
 
     $wave.Dispose(); $pen.Dispose(); $graphics.Dispose()
@@ -169,4 +169,4 @@ Write-Icon -Bitmaps $trayBitmaps -Path (Join-Path $resources 'TrayIcon.ico')
 $trayBitmaps | ForEach-Object { $_.Dispose() }
 
 Write-Host ""
-Write-Host "Wrote res/AppIcon.ico and res/TrayIcon.ico — rebuild to embed them." -ForegroundColor Green
+Write-Host "Wrote res/AppIcon.ico and res/TrayIcon.ico - rebuild to embed them." -ForegroundColor Green

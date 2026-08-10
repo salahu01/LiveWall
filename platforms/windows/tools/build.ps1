@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Configures and builds LiveWall for Windows.
 
