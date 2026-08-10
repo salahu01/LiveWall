@@ -37,6 +37,13 @@ int even(double value) {
 }
 
 std::string describe(HRESULT hr, const char* stage) {
+    // Logged unconditionally, stage and code included. The user-facing text is
+    // deliberately plainer than this, but the recognised cases used to return a
+    // sentence with neither — "Access to that file was denied." named no stage,
+    // carried no code and was never written anywhere — which left no way to tell
+    // a source that could not be read from an output that could not be created.
+    Log::error(std::string("import failed while ") + stage + ": " + Log::hresult(hr));
+
     // MF_E_TOPO_CODEC_NOT_FOUND and friends are the interesting cases; the rest
     // get the generic wording plus the code, which at least makes a bug report
     // actionable.
@@ -53,10 +60,97 @@ std::string describe(HRESULT hr, const char* stage) {
             return "No encoder on this machine accepts these settings. Try the Balanced or "
                    "Ultra Light preset.";
         case E_ACCESSDENIED:
-            return "Access to that file was denied.";
+            return std::string("Windows denied access while ") + stage + ".";
         default:
             return std::string("Conversion failed at ") + stage + ": " + Log::hresult(hr);
     }
+}
+
+// Whether the file is a cloud placeholder — a stub whose bytes still live on the
+// provider's server. OneDrive's Files On-Demand leaves these behind by default,
+// and opening one is a request for the provider to fetch it. A provider that is
+// paused, signed out, metered or simply offline refuses, and the refusal that
+// reaches the caller is a bare ERROR_ACCESS_DENIED with nothing to say it was
+// about the network rather than about permissions.
+bool isCloudPlaceholder(DWORD attributes) {
+    if (attributes == INVALID_FILE_ATTRIBUTES) return false;
+    return (attributes & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN |
+                          FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)) != 0;
+}
+
+// Opens the source the way the reader is about to, so that a refusal can name
+// what was refused. MFCreateSourceReaderFromURL collapses locked, unreadable and
+// never-downloaded into one E_ACCESSDENIED; Win32 distinguishes them.
+std::string checkReadable(const std::wstring& source) {
+    const bool placeholder = isCloudPlaceholder(GetFileAttributesW(source.c_str()));
+
+    // Shared every way: this is a read-only probe, and refusing to import a file
+    // merely because some other program has it open would be its own bug.
+    const HANDLE file =
+        CreateFileW(source.c_str(), GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+        CloseHandle(file);
+        return {};
+    }
+
+    const DWORD error = GetLastError();
+    Log::error("cannot open the source file: " + Log::lastError());
+
+    switch (error) {
+        case ERROR_ACCESS_DENIED:
+            if (placeholder) {
+                return "That video is stored online only and Windows could not download it. "
+                       "Open it once in File Explorer so your cloud provider fetches a local "
+                       "copy, then add it again.";
+            }
+            return "Windows would not let LiveWall read that file. It may sit in a protected "
+                   "folder, or a security product may be blocking it — try copying the video "
+                   "somewhere else and adding that copy.";
+        case ERROR_SHARING_VIOLATION:
+            return "Another program has that file open exclusively. Close it and try again.";
+        case ERROR_FILE_NOT_FOUND:
+        case ERROR_PATH_NOT_FOUND:
+            return "That file no longer exists.";
+        default:
+            return "That file could not be opened: " + Log::hresult(HRESULT_FROM_WIN32(error));
+    }
+}
+
+// The same check for the other end. The library folder is under %LOCALAPPDATA%,
+// which is writable by definition — right up until a ransomware-protection rule
+// or a roaming-profile policy says otherwise, at which point the sink writer
+// fails with the identical E_ACCESSDENIED the reader would have produced.
+std::string checkWritable(const std::wstring& destination) {
+    const size_t slash = destination.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) {
+        const std::wstring directory = destination.substr(0, slash);
+        // SHCreateDirectoryExW returns its error rather than setting the thread's
+        // last-error, so there is nothing more specific to log than the path.
+        if (!paths::createDirectories(directory)) {
+            Log::error("cannot create the library folder: " + narrow(directory));
+            return "LiveWall's library folder could not be created at " + narrow(directory) + ".";
+        }
+    }
+
+    // Deleted on close, so the probe leaves nothing behind even if the encode
+    // never starts.
+    const HANDLE probe = CreateFileW(destination.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                     FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (probe != INVALID_HANDLE_VALUE) {
+        CloseHandle(probe);
+        return {};
+    }
+
+    const DWORD error = GetLastError();
+    Log::error("cannot write to the library folder: " + Log::lastError());
+    if (error == ERROR_ACCESS_DENIED) {
+        return "Windows would not let LiveWall write to its own library folder. Controlled "
+               "folder access or an antivirus rule is the usual cause — allow LiveWall.exe, "
+               "then try again.";
+    }
+    return "The converted file could not be created: " + Log::hresult(HRESULT_FROM_WIN32(error));
 }
 
 // Applies the encoder settings that a media type cannot carry. These live on
@@ -239,6 +333,13 @@ std::string Transcoder::convert(const std::wstring& source, const std::wstring& 
     } shutdownGuard;
 
     if (!paths::fileExists(source)) return "That file no longer exists.";
+
+    // Both ends are probed here, before any Media Foundation object exists.
+    // Doing it afterwards is what produced the unactionable dialog: whichever
+    // end was at fault, the failure arrived as the same code from an MF call
+    // that would not say which file it had been holding.
+    if (const std::string denied = checkReadable(source); !denied.empty()) return denied;
+    if (const std::string denied = checkWritable(destination); !denied.empty()) return denied;
 
     // ---------------------------------------------------------------------
     // Reader
