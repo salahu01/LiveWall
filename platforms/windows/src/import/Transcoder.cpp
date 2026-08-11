@@ -440,28 +440,6 @@ std::string Transcoder::convert(const std::wstring& source, const std::wstring& 
     }
     PropVariantClear(&durationVariant);
 
-    // ---------------------------------------------------------------------
-    // Writer
-    // ---------------------------------------------------------------------
-    paths::removeFile(destination);
-
-    ComPtr<IMFAttributes> writerAttributes;
-    if (FAILED(MFCreateAttributes(&writerAttributes, 3))) return "Out of memory.";
-    writerAttributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
-    // Throttling exists to keep a real-time capture in step with the clock.
-    // This is an offline convert and there is nothing to stay in step with;
-    // leaving it on makes the import take as long as the video.
-    writerAttributes->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
-    // The `shouldOptimizeForNetworkUse` analogue: the moov atom goes at the
-    // front, so opening the file does not read to the end first. On a wallpaper
-    // that is reopened every time the desktop becomes visible, that is the
-    // difference between an instant resume and a full-file read.
-    writerAttributes->SetUINT32(MF_MPEG4SINK_MOOV_BEFORE_MDAT, TRUE);
-
-    ComPtr<IMFSinkWriter> writer;
-    hr = MFCreateSinkWriterFromURL(destination.c_str(), nullptr, writerAttributes.Get(), &writer);
-    if (FAILED(hr)) return describe(hr, "creating the output file");
-
     const double pixels = static_cast<double>(width) * height;
     const int bitrate = static_cast<int>(pixels * fps * preset.bitsPerPixel);
 
@@ -484,95 +462,165 @@ std::string Transcoder::convert(const std::wstring& source, const std::wstring& 
         encodeType->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High);
     }
 
-    DWORD streamIndex = 0;
-    hr = writer->AddStream(encodeType.Get(), &streamIndex);
-    if (FAILED(hr)) return describe(hr, "configuring the encoder");
-
     // The reader's output type describes the frames going in.
     ComPtr<IMFMediaType> inputType;
     hr = reader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM),
                                      &inputType);
     if (FAILED(hr)) return describe(hr, "reading the scaler's output format");
 
-    hr = writer->SetInputMediaType(streamIndex, inputType.Get(), nullptr);
-    if (FAILED(hr)) return describe(hr, "connecting the scaler to the encoder");
-
-    hr = writer->BeginWriting();
-    if (FAILED(hr)) return describe(hr, "starting the encode");
-
-    configureEncoder(writer.Get(), streamIndex, preset, fps);
-
     // ---------------------------------------------------------------------
-    // Pump
+    // Writer + pump, wrapped in a retryable attempt.
     //
-    // The video processor rescales frames but does not retime them — it still
-    // emits at the source cadence. The frame grid has to be enforced here, by
-    // dropping source frames that fall between grid points and stamping the
-    // survivors onto exact 1/fps boundaries.
+    // MF_MPEG4SINK_MOOV_BEFORE_MDAT is a request, not a guarantee: on some
+    // machines the MP4 sink's moov-before-mdat pass fails at Finalize() with
+    // E_ACCESSDENIED even though every WriteSample succeeded, because the
+    // rewrite it does there needs something the driver's sink implementation
+    // won't give it. When that happens the whole encode is retried once with
+    // the flag off, trading the fast-resume optimisation for a file that
+    // imports at all.
     // ---------------------------------------------------------------------
-    FramePacer pacer(fps);
-    bool aborted = false;
-    std::string failure;
+    struct Attempt {
+        std::string failure;
+        bool failedAtFinalize = false;
+        bool aborted = false;
+        int kept = 0;
+        int dropped = 0;
+    };
 
-    for (;;) {
-        if (cancelled && cancelled()) {
-            aborted = true;
-            break;
+    auto attempt = [&](bool moovBeforeMdat) -> Attempt {
+        Attempt outcome;
+        paths::removeFile(destination);
+
+        ComPtr<IMFAttributes> writerAttributes;
+        if (FAILED(MFCreateAttributes(&writerAttributes, 3))) {
+            outcome.failure = "Out of memory.";
+            return outcome;
+        }
+        writerAttributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
+        // Throttling exists to keep a real-time capture in step with the clock.
+        // This is an offline convert and there is nothing to stay in step
+        // with; leaving it on makes the import take as long as the video.
+        writerAttributes->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
+        // The `shouldOptimizeForNetworkUse` analogue: the moov atom goes at
+        // the front, so opening the file does not read to the end first. On a
+        // wallpaper that is reopened every time the desktop becomes visible,
+        // that is the difference between an instant resume and a full-file
+        // read.
+        writerAttributes->SetUINT32(MF_MPEG4SINK_MOOV_BEFORE_MDAT,
+                                    moovBeforeMdat ? TRUE : FALSE);
+
+        ComPtr<IMFSinkWriter> writer;
+        HRESULT localHr = MFCreateSinkWriterFromURL(destination.c_str(), nullptr,
+                                                     writerAttributes.Get(), &writer);
+        if (FAILED(localHr)) {
+            outcome.failure = describe(localHr, "creating the output file");
+            return outcome;
         }
 
-        DWORD stream = 0;
-        DWORD flags = 0;
-        LONGLONG timestamp = 0;
-        ComPtr<IMFSample> sample;
-
-        hr = reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0,
-                                &stream, &flags, &timestamp, &sample);
-        if (FAILED(hr)) {
-            failure = describe(hr, "reading a frame");
-            break;
+        DWORD streamIndex = 0;
+        localHr = writer->AddStream(encodeType.Get(), &streamIndex);
+        if (FAILED(localHr)) {
+            outcome.failure = describe(localHr, "configuring the encoder");
+            return outcome;
         }
-        if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) break;
-        if ((flags & MF_SOURCE_READERF_ERROR) != 0) {
-            failure = "The file ended unexpectedly. It may be damaged.";
-            break;
+
+        localHr = writer->SetInputMediaType(streamIndex, inputType.Get(), nullptr);
+        if (FAILED(localHr)) {
+            outcome.failure = describe(localHr, "connecting the scaler to the encoder");
+            return outcome;
         }
-        if (!sample) continue;
 
-        const FramePacer::Decision decision = pacer.accept(timestamp);
-        if (decision.keep) {
-            sample->SetSampleTime(decision.outputTimeHns);
-            sample->SetSampleDuration(decision.durationHns);
+        localHr = writer->BeginWriting();
+        if (FAILED(localHr)) {
+            outcome.failure = describe(localHr, "starting the encode");
+            return outcome;
+        }
 
-            hr = writer->WriteSample(streamIndex, sample.Get());
-            if (FAILED(hr)) {
-                failure = describe(hr, "encoding a frame");
+        configureEncoder(writer.Get(), streamIndex, preset, fps);
+
+        // The video processor rescales frames but does not retime them — it
+        // still emits at the source cadence. The frame grid has to be
+        // enforced here, by dropping source frames that fall between grid
+        // points and stamping the survivors onto exact 1/fps boundaries.
+        FramePacer pacer(fps);
+
+        for (;;) {
+            if (cancelled && cancelled()) {
+                outcome.aborted = true;
                 break;
+            }
+
+            DWORD stream = 0;
+            DWORD flags = 0;
+            LONGLONG timestamp = 0;
+            ComPtr<IMFSample> sample;
+
+            localHr = reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM),
+                                         0, &stream, &flags, &timestamp, &sample);
+            if (FAILED(localHr)) {
+                outcome.failure = describe(localHr, "reading a frame");
+                break;
+            }
+            if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) break;
+            if ((flags & MF_SOURCE_READERF_ERROR) != 0) {
+                outcome.failure = "The file ended unexpectedly. It may be damaged.";
+                break;
+            }
+            if (!sample) continue;
+
+            const FramePacer::Decision decision = pacer.accept(timestamp);
+            if (decision.keep) {
+                sample->SetSampleTime(decision.outputTimeHns);
+                sample->SetSampleDuration(decision.durationHns);
+
+                localHr = writer->WriteSample(streamIndex, sample.Get());
+                if (FAILED(localHr)) {
+                    outcome.failure = describe(localHr, "encoding a frame");
+                    break;
+                }
+            }
+
+            if (progress && durationHns > 0) {
+                progress(std::clamp(static_cast<double>(timestamp) / durationHns, 0.0, 1.0));
             }
         }
 
-        if (progress && durationHns > 0) {
-            progress(std::clamp(static_cast<double>(timestamp) / durationHns, 0.0, 1.0));
+        outcome.kept = pacer.kept();
+        outcome.dropped = pacer.dropped();
+
+        if (outcome.aborted || !outcome.failure.empty()) {
+            writer->Finalize();
+            paths::removeFile(destination);
+            return outcome;
         }
+
+        localHr = writer->Finalize();
+        if (FAILED(localHr)) {
+            paths::removeFile(destination);
+            outcome.failure = describe(localHr, "finishing the file");
+            outcome.failedAtFinalize = true;
+        }
+        return outcome;
+    };
+
+    Attempt outcome = attempt(true);
+    if (outcome.failedAtFinalize) {
+        Log::info("moov-before-mdat failed at Finalize; retrying the import without it");
+
+        PROPVARIANT start;
+        PropVariantInit(&start);
+        start.vt = VT_I8;
+        start.hVal.QuadPart = 0;
+        reader->SetCurrentPosition(GUID_NULL, start);
+        PropVariantClear(&start);
+
+        outcome = attempt(false);
     }
 
-    if (aborted) {
-        writer->Finalize();
-        paths::removeFile(destination);
-        return "Conversion cancelled.";
-    }
-    if (!failure.empty()) {
-        writer->Finalize();
-        paths::removeFile(destination);
-        return failure;
-    }
+    if (outcome.aborted) return "Conversion cancelled.";
+    if (!outcome.failure.empty()) return outcome.failure;
 
-    hr = writer->Finalize();
-    if (FAILED(hr)) {
-        paths::removeFile(destination);
-        return describe(hr, "finishing the file");
-    }
-
-    if (pacer.kept() == 0) {
+    if (outcome.kept == 0) {
         paths::removeFile(destination);
         return "No frames could be read from that file.";
     }
@@ -589,7 +637,7 @@ std::string Transcoder::convert(const std::wstring& source, const std::wstring& 
 
     if (progress) progress(1.0);
     Log::info(format("imported %dx%d @ %d fps, %s, kept %d frames and dropped %d", width, height,
-                     fps, codec.name.c_str(), pacer.kept(), pacer.dropped()));
+                     fps, codec.name.c_str(), outcome.kept, outcome.dropped));
     return {};
 }
 

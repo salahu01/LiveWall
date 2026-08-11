@@ -209,6 +209,7 @@ void VideoSource::releaseReader() {
     reader_.Reset();
     lumaView_.Reset();
     chromaView_.Reset();
+    shaderTexture_.Reset();
 }
 
 void VideoSource::attach(SwapChainTarget* target, int refreshHz) {
@@ -396,8 +397,7 @@ bool VideoSource::bindFrameTextures(IMFSample* sample) {
     dxgiBuffer->GetSubresourceIndex(&subresource);
 
     // The decoder's output is a texture *array*, and each decoded frame is one
-    // slice of it. Views therefore have to name the slice, and cannot be built
-    // once and reused.
+    // slice of it.
     D3D11_TEXTURE2D_DESC description{};
     texture->GetDesc(&description);
 
@@ -405,22 +405,58 @@ bool VideoSource::bindFrameTextures(IMFSample* sample) {
                          description.Format == DXGI_FORMAT_P016);
     bitDepth_ = tenBit ? 10 : 8;
 
+    // Some drivers (seen on Intel UHD 630) allocate that array with
+    // D3D11_BIND_DECODER only — no D3D11_BIND_SHADER_RESOURCE — so a view can
+    // never be built on it directly, no matter what the reader's attributes
+    // ask for at open time: CreateShaderResourceView fails with E_INVALIDARG
+    // on every frame. The portable fix is the one every D3D11 video renderer
+    // ends up at: copy the decoded slice, on the GPU, into a plain texture
+    // this app allocates and binds itself. Recreated only when the frame size
+    // or format changes, not per frame.
+    D3D11_TEXTURE2D_DESC current{};
+    if (shaderTexture_) shaderTexture_->GetDesc(&current);
+    if (!shaderTexture_ || current.Width != description.Width ||
+        current.Height != description.Height || current.Format != description.Format) {
+        D3D11_TEXTURE2D_DESC copyDescription{};
+        copyDescription.Width = description.Width;
+        copyDescription.Height = description.Height;
+        copyDescription.MipLevels = 1;
+        copyDescription.ArraySize = 1;
+        copyDescription.Format = description.Format;
+        copyDescription.SampleDesc = {1, 0};
+        copyDescription.Usage = D3D11_USAGE_DEFAULT;
+        copyDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        shaderTexture_.Reset();
+        const HRESULT hr =
+            device_->device()->CreateTexture2D(&copyDescription, nullptr, &shaderTexture_);
+        if (FAILED(hr)) {
+            Log::error("could not allocate a shader-viewable copy of the decoded frame: " +
+                      Log::hresult(hr));
+            return false;
+        }
+    }
+
+    device_->context()->CopySubresourceRegion(shaderTexture_.Get(), 0, 0, 0, 0, texture.Get(),
+                                              subresource, nullptr);
+
     D3D11_SHADER_RESOURCE_VIEW_DESC luma{};
     luma.Format = tenBit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
-    luma.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
-    luma.Texture2DArray.ArraySize = 1;
-    luma.Texture2DArray.FirstArraySlice = subresource;
-    luma.Texture2DArray.MipLevels = 1;
+    luma.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    luma.Texture2D.MipLevels = 1;
 
     D3D11_SHADER_RESOURCE_VIEW_DESC chroma = luma;
     chroma.Format = tenBit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
 
     lumaView_.Reset();
     chromaView_.Reset();
-    if (FAILED(device_->device()->CreateShaderResourceView(texture.Get(), &luma, &lumaView_)) ||
-        FAILED(device_->device()->CreateShaderResourceView(texture.Get(), &chroma,
-                                                           &chromaView_))) {
-        Log::error("could not view the decoded frame's planes");
+    const HRESULT lumaHr = device_->device()->CreateShaderResourceView(shaderTexture_.Get(), &luma,
+                                                                       &lumaView_);
+    const HRESULT chromaHr = device_->device()->CreateShaderResourceView(
+        shaderTexture_.Get(), &chroma, &chromaView_);
+    if (FAILED(lumaHr) || FAILED(chromaHr)) {
+        Log::error("could not view the decoded frame's planes: luma " + Log::hresult(lumaHr) +
+                  ", chroma " + Log::hresult(chromaHr));
         return false;
     }
     return true;
