@@ -112,6 +112,15 @@ private:
     ComPtr<ID3D11ShaderResourceView> lumaView_;
     ComPtr<ID3D11ShaderResourceView> chromaView_;
 
+    // Some drivers (seen on Intel UHD 630) allocate the decoder's own texture
+    // array without D3D11_BIND_SHADER_RESOURCE, so a view can never be built
+    // on it directly — CreateShaderResourceView fails with E_INVALIDARG no
+    // matter what the reader asks for at open time. This is a same-GPU copy
+    // of each decoded slice into a plain texture this app owns and binds
+    // itself, kept across frames and only recreated when the frame size or
+    // format changes.
+    ComPtr<ID3D11Texture2D> shaderTexture_;
+
     std::thread thread_;
     std::atomic<bool> active_{false};
     std::atomic<bool> stopping_{false};
