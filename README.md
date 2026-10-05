@@ -1,4 +1,4 @@
-<img src="icon.png" width="96" align="right" alt="LiveWall icon">
+<img src="public/icon.png" width="96" align="right" alt="LiveWall icon">
 
 # LiveWall — website
 
@@ -7,17 +7,24 @@ Source of **https://salahu01.github.io/livewall/**, the project page for
 macOS, Windows, Linux and Android that costs almost nothing when you aren't
 looking at it.
 
-A single static page: `index.html` with inline CSS and JS, GSAP from cdnjs, and
-the two sample loops in `media/`. No build step. GitHub Pages serves `main`
-directly.
+Next.js (App Router) exported as a static site, with GSAP + ScrollTrigger for
+motion and the two sample loops in `public/media/`. GitHub Pages serves the
+`gh-pages` branch.
+
+- `app/page.tsx` — page markup
+- `app/globals.css` — styles
+- `lib/motion.js` — WebGL field, coverage-gate demo, canvases and scroll animations
 
 - App source and releases: [salahu01/livewall-app](https://github.com/salahu01/livewall-app)
 - Project board: [github.com/users/salahu01/projects/3](https://github.com/users/salahu01/projects/3)
 
-## Preview locally
+## Develop and deploy
 
 ```sh
-python3 -m http.server 8000   # then open http://localhost:8000
+npm install
+npm run dev     # http://localhost:3000
+npm run build   # static export to out/ (basePath /livewall)
+npm run deploy  # build and force-push out/ to the gh-pages branch
 ```
 
 ## Licence
